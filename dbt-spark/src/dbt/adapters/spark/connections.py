@@ -117,8 +117,11 @@ class SparkCredentials(Credentials):
     # spark-submit / spark-sql CLI settings
     spark_home: Optional[str] = None  # path to SPARK_HOME; uses $SPARK_HOME env var if unset
     spark_submit_args: List[str] = field(default_factory=list)  # extra args for spark-submit
-    spark_sql_args: List[str] = field(default_factory=list)  # extra args for spark-sql
+    spark_sql_args: List[str] = field(default_factory=list)  # extra args for spark-sql (CLI mode only)
     spark_submit_timeout: Optional[int] = None  # max seconds for spark-submit jobs (None = wait forever)
+
+    # spark-sql thrift server settings (when host is set, connects via thrift instead of CLI)
+    spark_history_server: Optional[str] = None  # URL of the Spark History Server UI (informational)
 
     @classmethod
     def __pre_deserialize__(cls, data: Any) -> Any:
@@ -174,6 +177,7 @@ class SparkCredentials(Credentials):
         if (
             self.method == SparkConnectionMethod.HTTP
             or self.method == SparkConnectionMethod.THRIFT
+            or (self.method == SparkConnectionMethod.SPARK_SQL and self.host is not None)
         ) and not (ThriftState and THttpClient and hive):
             raise DbtRuntimeError(
                 f"{self.method} connection method requires "
@@ -194,10 +198,9 @@ class SparkCredentials(Credentials):
                     f"ImportError({e.msg})"
                 ) from e
 
-        if self.method not in (
+        if self.host is not None and self.method not in (
             SparkConnectionMethod.SESSION,
             SparkConnectionMethod.SPARK_SUBMIT,
-            SparkConnectionMethod.SPARK_SQL,
         ):
             self.host = self.host.rstrip("/")
 
@@ -802,11 +805,50 @@ class SparkConnectionManager(SQLConnectionManager):
                         Connection(server_side_parameters=creds.server_side_parameters)
                     )
                 elif creds.method == SparkConnectionMethod.SPARK_SQL:
-                    handle = SparkSqlCliConnectionWrapper(
-                        spark_home=creds.spark_home,
-                        extra_args=creds.spark_sql_args,
-                        schema=creds.schema,
-                    )
+                    if creds.host is not None:
+                        # Thrift server mode: connect to a long-running HiveThriftServer2
+                        # instead of spawning a new Spark CLI process per batch.
+                        cls.validate_creds(creds, ["host", "port", "schema"])
+                        if creds.use_ssl:
+                            transport = build_ssl_transport(
+                                host=creds.host,
+                                port=creds.port,
+                                username=creds.user,
+                                auth=creds.auth,
+                                kerberos_service_name=creds.kerberos_service_name,
+                                password=creds.password,
+                            )
+                            conn = hive.connect(
+                                thrift_transport=transport,
+                                configuration=creds.server_side_parameters,
+                            )
+                        else:
+                            conn = hive.connect(
+                                host=creds.host,
+                                port=creds.port,
+                                username=creds.user,
+                                auth=creds.auth,
+                                kerberos_service_name=creds.kerberos_service_name,
+                                password=creds.password,
+                                configuration=creds.server_side_parameters,
+                            )
+                        handle = PyhiveConnectionWrapper(
+                            conn,
+                            poll_interval=creds.poll_interval,
+                            query_timeout=creds.query_timeout,
+                            query_retries=creds.query_retries,
+                        )
+                        if creds.spark_history_server:
+                            logger.debug(
+                                "Spark History Server: {}".format(creds.spark_history_server)
+                            )
+                    else:
+                        # CLI mode: invoke spark-sql as a subprocess (no long-running server).
+                        handle = SparkSqlCliConnectionWrapper(
+                            spark_home=creds.spark_home,
+                            extra_args=creds.spark_sql_args,
+                            schema=creds.schema,
+                        )
                 elif creds.method == SparkConnectionMethod.SPARK_SUBMIT:
                     # spark-submit is used only for Python model execution (PythonJobHelper).
                     # For SQL statements issued by dbt internals (e.g. show schemas) we

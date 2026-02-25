@@ -41,19 +41,45 @@ Review the repository [README.md](../README.md) as most of that information pert
 
 ## Running locally
 
-A `docker-compose` environment starts a Spark Thrift server and a Postgres database as a Hive Metastore backend.
-Note: dbt-spark now supports Spark 3.3.2.
+A `docker-compose` environment starts three services:
 
-The following command starts two docker containers:
+| Service | Description | Port |
+|---|---|---|
+| `dbt-spark3-thrift` | Spark Thrift Server (`HiveThriftServer2`) — long-running JDBC endpoint | `10000` |
+| `dbt-spark-history` | Spark History Server — UI for completed queries and jobs | `18080` |
+| `dbt-hive-metastore` | Postgres-backed Hive Metastore | internal |
+
+Note: dbt-spark now supports Spark 4.1.0.
+
+The following command starts all containers:
 
 ```sh
 docker-compose up -d
 ```
 
-It will take a bit of time for the instance to start, you can check the logs of the two containers.
-If the instance doesn't start correctly, try the complete reset command listed below and then try start again.
+It will take a bit of time for the instance to start; you can check the logs of the containers.
+If the instance doesn't start correctly, try the complete reset command listed below and then try again.
 
-Create a profile like this one:
+Create a profile using the `spark_sql` method in thrift server mode:
+
+```yaml
+spark_testing:
+  target: local
+  outputs:
+    local:
+      type: spark
+      method: spark_sql
+      host: 127.0.0.1
+      port: 10000
+      user: dbt
+      schema: analytics
+      connect_retries: 5
+      connect_timeout: 60
+      retry_all: true
+      spark_history_server: http://localhost:18080
+```
+
+Or using the `thrift` method directly:
 
 ```yaml
 spark_testing:
@@ -71,17 +97,17 @@ spark_testing:
       retry_all: true
 ```
 
-Connecting to the local spark instance:
+Connecting to the local Spark instance:
 
-* The Spark UI should be available at [http://localhost:4040/sqlserver/](http://localhost:4040/sqlserver/)
-* The endpoint for SQL-based testing is at `http://localhost:10000` and can be referenced with the Hive or Spark JDBC drivers using connection string `jdbc:hive2://localhost:10000` and default credentials `dbt`:`dbt`
+* **Spark UI** (active queries): [http://localhost:4040/sqlserver/](http://localhost:4040/sqlserver/)
+* **Spark History Server** (completed queries): [http://localhost:18080](http://localhost:18080)
+* **Thrift endpoint**: `jdbc:hive2://localhost:10000` — credentials `dbt`:`dbt`
 
-Note that the Hive metastore data is persisted under `./.hive-metastore/`, and the Spark-produced data under `./.spark-warehouse/`. To completely reset you environment run the following:
+Note that the Hive metastore data is persisted under `./.hive-metastore/`, Spark warehouse data under `./.spark-warehouse/`, and event logs under `./.spark-events/`. To completely reset your environment run:
 
 ```sh
 docker-compose down
-rm -rf ./.hive-metastore/
-rm -rf ./.spark-warehouse/
+rm -rf ./.hive-metastore/ ./.spark-warehouse/ ./.spark-events/
 ```
 
 ## Additional Configuration for MacOS
@@ -93,17 +119,61 @@ If installing on MacOS, use `homebrew` to install required dependencies.
 
 ## Configuring spark-submit and spark-sql methods
 
-The `spark_submit` and `spark_sql` connection methods run SQL and Python models locally using the Spark CLI tools. No `host` is required — dbt invokes `spark-submit` or `spark-sql` as subprocesses on the machine running dbt.
+The `spark_submit` and `spark_sql` connection methods run SQL and Python models using either a long-running Spark Thrift Server or the Spark CLI tools directly.
 
 ### Requirements
 
-- A working Spark installation accessible via `SPARK_HOME` or on `PATH`.
+- A working Spark installation accessible via `SPARK_HOME` or on `PATH` (CLI mode), or a running `HiveThriftServer2` (thrift server mode).
 - For `spark_submit`: `spark-submit` must be executable.
-- For `spark_sql`: `spark-sql` must be executable.
+- For `spark_sql` CLI mode: `spark-sql` must be executable.
+- For `spark_sql` thrift server mode: `pyhive` must be installed (`pip install dbt-spark[PyHive]`).
 
-### spark-sql
+### spark-sql — thrift server mode (recommended)
 
-Use `spark_sql` when all your models are SQL-based. dbt executes each statement with `spark-sql -e '...'`.
+When `host` is set, `spark_sql` connects to a long-running Spark Thrift Server (`HiveThriftServer2`) via the Thrift protocol. This avoids the JVM startup cost of spawning a new Spark application for every dbt invocation, and lets you share a single Spark context across many dbt runs. The Spark UI and History Server remain accessible throughout.
+
+```yaml
+my_spark_project:
+  target: dev
+  outputs:
+    dev:
+      type: spark
+      method: spark_sql
+      host: 127.0.0.1
+      port: 10000
+      schema: analytics
+      user: dbt
+      connect_retries: 5
+      connect_timeout: 60
+      retry_all: true
+      # Optional: URL of the Spark History Server UI (informational — logged at startup)
+      spark_history_server: http://127.0.0.1:18080
+      # Optional: server-side Spark configuration applied to each session
+      server_side_parameters:
+        spark.executor.memory: "4g"
+        spark.eventLog.enabled: "true"
+        spark.eventLog.dir: /tmp/spark-events
+```
+
+Start a thrift server locally using the bundled docker-compose:
+
+```sh
+docker-compose up -d
+```
+
+Or start one manually:
+
+```sh
+$SPARK_HOME/sbin/start-thriftserver.sh \
+  --master local[*] \
+  --conf spark.sql.ansi.enabled=false \
+  --conf spark.eventLog.enabled=true \
+  --conf spark.eventLog.dir=/tmp/spark-events
+```
+
+### spark-sql — CLI mode
+
+When `host` is **not** set, dbt executes each statement with `spark-sql -e '...'` (or `-f` for batches). A new Spark application is launched per dbt invocation.
 
 ```yaml
 my_spark_project:
@@ -157,16 +227,27 @@ my_spark_project:
 |---|---|---|---|
 | `method` | Yes | — | `spark_sql` or `spark_submit` |
 | `schema` | Yes | — | The default schema (database) to use |
-| `spark_home` | No | `$SPARK_HOME` env var | Path to your Spark installation |
-| `spark_sql_args` | No | `[]` | Extra CLI flags for `spark-sql` |
+| `host` | No | — | Thrift server hostname. When set, `spark_sql` connects via Thrift instead of CLI |
+| `port` | No | `443` | Thrift server port (typically `10000`) |
+| `user` | No | — | Username for thrift server authentication |
+| `auth` | No | — | Auth mechanism for thrift (e.g. `NONE`, `LDAP`, `KERBEROS`) |
+| `use_ssl` | No | `false` | Use SSL/TLS for the thrift connection |
+| `spark_history_server` | No | — | URL of the Spark History Server UI (informational) |
+| `spark_home` | No | `$SPARK_HOME` env var | Path to your Spark installation (CLI mode) |
+| `spark_sql_args` | No | `[]` | Extra CLI flags for `spark-sql` (CLI mode only) |
 | `spark_submit_args` | No | `[]` | Extra CLI flags for `spark-submit` (Python models only) |
 | `spark_submit_timeout` | No | `null` (no timeout) | Max seconds to wait for a `spark-submit` job |
+| `poll_interval` | No | `5` | Seconds between status polls for thrift queries |
+| `query_timeout` | No | `null` (no timeout) | Max seconds for a single thrift query |
+| `query_retries` | No | `1` | Times to retry on connection loss during query polling |
+| `server_side_parameters` | No | `{}` | Spark configuration sent to the thrift server per session |
 
 ### Notes
 
-- Neither method requires `host`, `port`, or `token`.
-- `spark_submit` only invokes `spark-submit` for Python models. All SQL (including dbt internals) uses `spark-sql`.
+- `spark_sql` thrift server mode requires `pip install dbt-spark[PyHive]`.
+- `spark_submit` only invokes `spark-submit` for Python models. All SQL (including dbt internals) uses `spark-sql` CLI.
 - If `spark_home` is not set in the profile, dbt falls back to the `SPARK_HOME` environment variable, then to looking up `spark-sql`/`spark-submit` on `PATH`.
+- To use the Spark History Server, enable event logging on the thrift server (`spark.eventLog.enabled=true`) and start `$SPARK_HOME/sbin/start-history-server.sh`.
 
 ## Contribute
 
