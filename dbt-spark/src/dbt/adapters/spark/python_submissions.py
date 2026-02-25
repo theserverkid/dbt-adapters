@@ -1,4 +1,7 @@
 import base64
+import os
+import subprocess
+import tempfile
 import time
 import requests
 from typing import Any, Dict, Callable, Iterable
@@ -293,3 +296,105 @@ class AllPurposeClusterPythonJobHelper(BaseDatabricksHelper):
                     )
             finally:
                 context.destroy(context_id)
+
+
+class SparkSubmitPythonJobHelper(PythonJobHelper):
+    """Submit a Python model via the spark-submit CLI.
+
+    The compiled Python code is written to a temporary file and submitted
+    via ``spark-submit <extra_args> <tmpfile.py>``.  stdout/stderr from the
+    process are streamed to the dbt logger so users see Spark output in real
+    time.
+
+    Profile fields used (all optional unless noted):
+      spark_home         – path to ``$SPARK_HOME``; falls back to the env var.
+      spark_submit_args  – list of extra CLI flags for spark-submit, e.g.
+                           ["--master", "local[4]", "--conf", "k=v"].
+      spark_submit_timeout – max seconds to wait for the job (None = forever).
+    """
+
+    def __init__(self, parsed_model: Dict, credentials: "SparkCredentials") -> None:  # type: ignore[name-defined]
+        self.parsed_model = parsed_model
+        self.credentials = credentials
+        self.identifier = parsed_model["alias"]
+        self.schema = parsed_model["schema"]
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _spark_submit_bin(self) -> str:
+        home = getattr(self.credentials, "spark_home", None) or os.environ.get("SPARK_HOME", "")
+        if home:
+            return os.path.join(home, "bin", "spark-submit")
+        return "spark-submit"
+
+    def _extra_args(self) -> list:
+        return list(getattr(self.credentials, "spark_submit_args", []))
+
+    def _timeout(self) -> Any:
+        return getattr(self.credentials, "spark_submit_timeout", None)
+
+    # ------------------------------------------------------------------
+    # PythonJobHelper interface
+    # ------------------------------------------------------------------
+
+    def submit(self, compiled_code: str) -> None:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".py",
+            prefix=f"dbt_spark_{self.schema}_{self.identifier}_",
+            delete=False,
+        ) as tmp:
+            tmp.write(compiled_code)
+            tmp_path = tmp.name
+
+        try:
+            cmd = [self._spark_submit_bin()] + self._extra_args() + [tmp_path]
+            from dbt.adapters.events.logging import AdapterLogger
+
+            _logger = AdapterLogger("Spark")
+            _logger.debug("spark-submit command: {}".format(cmd))
+
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+            except FileNotFoundError as e:
+                raise DbtRuntimeError(
+                    "Could not find spark-submit binary. "
+                    "Set spark_home in your profile or ensure spark-submit is on PATH.\n"
+                    f"Original error: {e}"
+                ) from e
+
+            output_lines = []
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                _logger.debug(line)
+                output_lines.append(line)
+
+            timeout = self._timeout()
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                raise DbtRuntimeError(
+                    f"spark-submit job timed out after {timeout} seconds for model "
+                    f"{self.schema}.{self.identifier}"
+                )
+
+            if proc.returncode != 0:
+                raise DbtRuntimeError(
+                    f"spark-submit exited with code {proc.returncode} for model "
+                    f"{self.schema}.{self.identifier}.\n"
+                    + "\n".join(output_lines[-50:])  # last 50 lines for context
+                )
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass

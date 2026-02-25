@@ -46,6 +46,9 @@ except ImportError:
     pass  # done deliberately: setting modules to None explicitly violates MyPy contracts by degrading type semantics
 
 import base64
+import os
+import subprocess
+import tempfile
 import time
 
 logger = AdapterLogger("Spark")
@@ -79,6 +82,8 @@ class SparkConnectionMethod(StrEnum):
     HTTP = "http"
     ODBC = "odbc"
     SESSION = "session"
+    SPARK_SUBMIT = "spark_submit"
+    SPARK_SQL = "spark_sql"
 
 
 @dataclass
@@ -109,6 +114,12 @@ class SparkCredentials(Credentials):
     poll_interval: int = 5  # Polling interval in seconds for async queries
     query_retries: int = 1  # Number of times to retry on connection loss during query execution
 
+    # spark-submit / spark-sql CLI settings
+    spark_home: Optional[str] = None  # path to SPARK_HOME; uses $SPARK_HOME env var if unset
+    spark_submit_args: List[str] = field(default_factory=list)  # extra args for spark-submit
+    spark_sql_args: List[str] = field(default_factory=list)  # extra args for spark-sql
+    spark_submit_timeout: Optional[int] = None  # max seconds for spark-submit jobs (None = wait forever)
+
     @classmethod
     def __pre_deserialize__(cls, data: Any) -> Any:
         data = super().__pre_deserialize__(data)
@@ -123,7 +134,11 @@ class SparkCredentials(Credentials):
     def __post_init__(self) -> None:
         if self.method is None:
             raise DbtRuntimeError("Must specify `method` in profile")
-        if self.host is None:
+        # spark-submit and spark-sql use the local CLI; host is not required
+        if self.method not in (
+            SparkConnectionMethod.SPARK_SUBMIT,
+            SparkConnectionMethod.SPARK_SQL,
+        ) and self.host is None:
             raise DbtRuntimeError("Must specify `host` in profile")
         if self.schema is None:
             raise DbtRuntimeError("Must specify `schema` in profile")
@@ -179,7 +194,11 @@ class SparkCredentials(Credentials):
                     f"ImportError({e.msg})"
                 ) from e
 
-        if self.method != SparkConnectionMethod.SESSION:
+        if self.method not in (
+            SparkConnectionMethod.SESSION,
+            SparkConnectionMethod.SPARK_SUBMIT,
+            SparkConnectionMethod.SPARK_SQL,
+        ):
             self.host = self.host.rstrip("/")
 
         self.server_side_parameters = {
@@ -423,6 +442,95 @@ class PyodbcConnectionWrapper(PyhiveConnectionWrapper):
             self._cursor.execute(sql, *bindings)
 
 
+class SparkSqlCliConnectionWrapper(SparkConnectionWrapper):
+    """Execute SQL via the spark-sql CLI (spark-sql -e '...')."""
+
+    def __init__(self, spark_home: Optional[str], extra_args: List[str], schema: str) -> None:
+        self._spark_home = spark_home
+        self._extra_args = extra_args
+        self._schema = schema
+        self._rows: List[tuple] = []
+        self._description: Sequence[
+            Tuple[str, Any, Optional[int], Optional[int], Optional[int], Optional[int], bool]
+        ] = []
+
+    def _spark_sql_bin(self) -> str:
+        home = self._spark_home or os.environ.get("SPARK_HOME", "")
+        if home:
+            return os.path.join(home, "bin", "spark-sql")
+        return "spark-sql"
+
+    def cursor(self) -> "SparkSqlCliConnectionWrapper":
+        return self
+
+    def cancel(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def rollback(self) -> None:
+        logger.debug("NotImplemented: rollback")
+
+    def fetchall(self) -> List[tuple]:
+        return self._rows
+
+    def execute(self, sql: str, bindings: Optional[List[Any]] = None) -> None:
+        if sql.strip().endswith(";"):
+            sql = sql.strip()[:-1]
+
+        # Prepend USE schema so objects resolve correctly
+        full_sql = f"USE {self._schema};\n{sql}"
+
+        cmd = [self._spark_sql_bin()] + self._extra_args + ["-e", full_sql]
+        logger.debug("spark-sql command: {}".format(cmd))
+
+        try:
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError as e:
+            raise DbtRuntimeError(
+                f"Could not find spark-sql binary. "
+                f"Set spark_home in your profile or ensure spark-sql is on PATH.\n"
+                f"Original error: {e}"
+            ) from e
+
+        if result.returncode != 0:
+            raise DbtDatabaseError(
+                f"spark-sql exited with code {result.returncode}.\n"
+                f"stderr: {result.stderr}\n"
+                f"stdout: {result.stdout}"
+            )
+
+        # Parse TSV output into rows; spark-sql prints tab-separated values
+        lines = [line for line in result.stdout.splitlines() if line.strip()]
+        self._rows = []
+        self._description = []
+        if lines:
+            # spark-sql does not emit a header row by default; treat all lines as data
+            for line in lines:
+                self._rows.append(tuple(line.split("\t")))
+            if self._rows:
+                ncols = len(self._rows[0])
+                # Build a minimal description with unknown column names
+                self._description = [
+                    (f"col{i}", "string", None, None, None, None, True) for i in range(ncols)
+                ]
+
+    @property
+    def description(
+        self,
+    ) -> Sequence[
+        Tuple[str, Any, Optional[int], Optional[int], Optional[int], Optional[int], bool]
+    ]:
+        return self._description
+
+
 class SparkConnectionManager(SQLConnectionManager):
     TYPE = "spark"
 
@@ -632,6 +740,21 @@ class SparkConnectionManager(SQLConnectionManager):
 
                     handle = SessionConnectionWrapper(
                         Connection(server_side_parameters=creds.server_side_parameters)
+                    )
+                elif creds.method == SparkConnectionMethod.SPARK_SQL:
+                    handle = SparkSqlCliConnectionWrapper(
+                        spark_home=creds.spark_home,
+                        extra_args=creds.spark_sql_args,
+                        schema=creds.schema,
+                    )
+                elif creds.method == SparkConnectionMethod.SPARK_SUBMIT:
+                    # spark-submit is used only for Python model execution (PythonJobHelper).
+                    # For SQL statements issued by dbt internals (e.g. show schemas) we
+                    # fall back to spark-sql so the adapter can still introspect the metastore.
+                    handle = SparkSqlCliConnectionWrapper(
+                        spark_home=creds.spark_home,
+                        extra_args=creds.spark_sql_args,
+                        schema=creds.schema,
                     )
                 else:
                     raise DbtConfigError(f"invalid credential method: {creds.method}")

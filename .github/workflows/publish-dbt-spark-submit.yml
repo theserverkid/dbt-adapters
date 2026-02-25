@@ -1,0 +1,86 @@
+name: Publish dbt-spark-submit to PyPI
+
+# Triggers:
+#   - Push a tag matching "spark-submit-v*" (e.g. spark-submit-v1.10.0)
+#   - Manual run via GitHub Actions UI (workflow_dispatch)
+#
+# One-time setup required before this workflow can publish:
+#   1. Create a PyPI account at https://pypi.org if you don't have one.
+#   2. Go to https://pypi.org/manage/account/publishing/ and add a
+#      Trusted Publisher with these values:
+#        Package name:      dbt-spark-submit
+#        Owner:             <your-github-username>
+#        Repository:        <your-fork-repo-name>
+#        Workflow filename: publish-dbt-spark-submit.yml
+#        Environment name:  pypi
+#   3. In your GitHub repo go to Settings → Environments → New environment,
+#      name it "pypi". Optionally add a required reviewer for extra safety.
+
+on:
+  push:
+    tags:
+      - "spark-submit-v[0-9]*"  # e.g. spark-submit-v1.10.0 or spark-submit-v1.10.1
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — build but do NOT publish to PyPI"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  build-and-publish:
+    name: Build and publish dbt-spark-submit
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # required for OIDC trusted publishing
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install hatch
+        run: pip install --upgrade hatch
+
+      - name: Show package version
+        working-directory: dbt-spark
+        run: |
+          python -c "
+          import sys; sys.path.insert(0, 'src')
+          from dbt.adapters.spark.__version__ import version
+          print(f'Building dbt-spark-submit=={version}')
+          "
+
+      - name: Build wheel and source distribution
+        working-directory: dbt-spark
+        run: hatch build
+
+      - name: List built artifacts
+        working-directory: dbt-spark
+        run: ls -lh dist/
+
+      - name: Verify build with twine
+        working-directory: dbt-spark
+        run: |
+          pip install twine
+          twine check dist/*
+
+      - name: Publish to PyPI
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dbt-spark/dist/
+
+      - name: Dry run — skipped publish
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: echo "Dry run mode — skipping upload to PyPI."

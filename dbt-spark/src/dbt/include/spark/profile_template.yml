@@ -3,6 +3,7 @@ fixed:
 prompts:
   host:
     hint: yourorg.sparkhost.com
+    required: false
   _choose_authentication_method:
     odbc:
       _fixed_method: odbc
@@ -53,6 +54,29 @@ prompts:
         default: 1
         type: "int"
         hint: "number of times to retry on connection loss during query execution"
+    spark_sql:
+      _fixed_method: spark_sql
+      spark_home:
+        hint: "/opt/spark"
+        required: false
+      spark_sql_args:
+        hint: '["--master", "local[*]"]'
+        required: false
+    spark_submit:
+      _fixed_method: spark_submit
+      spark_home:
+        hint: "/opt/spark"
+        required: false
+      spark_submit_args:
+        hint: '["--master", "local[*]"]'
+        required: false
+      spark_sql_args:
+        hint: '["--master", "local[*]"]'
+        required: false
+      spark_submit_timeout:
+        type: "int"
+        hint: "maximum seconds to wait for spark-submit to complete (optional)"
+        required: false
   port:
     default: 443
     type: "int"

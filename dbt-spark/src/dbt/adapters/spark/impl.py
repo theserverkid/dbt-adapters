@@ -39,6 +39,7 @@ from dbt.adapters.spark import SparkColumn
 from dbt.adapters.spark.python_submissions import (
     JobClusterPythonJobHelper,
     AllPurposeClusterPythonJobHelper,
+    SparkSubmitPythonJobHelper,
 )
 from dbt.adapters.base import BaseRelation
 from dbt.adapters.contracts.relation import RelationType, RelationConfig
@@ -488,6 +489,14 @@ class SparkAdapter(SQLAdapter):
 
     @property
     def default_python_submission_method(self) -> str:
+        from dbt.adapters.spark.connections import SparkConnectionMethod
+
+        creds = self.config.credentials
+        if getattr(creds, "method", None) in (
+            SparkConnectionMethod.SPARK_SUBMIT,
+            SparkConnectionMethod.SPARK_SQL,
+        ):
+            return "spark_submit"
         return "all_purpose_cluster"
 
     @property
@@ -495,6 +504,7 @@ class SparkAdapter(SQLAdapter):
         return {
             "job_cluster": JobClusterPythonJobHelper,
             "all_purpose_cluster": AllPurposeClusterPythonJobHelper,
+            "spark_submit": SparkSubmitPythonJobHelper,
         }
 
     def standardize_grants_dict(self, grants_table: "agate.Table") -> dict:
