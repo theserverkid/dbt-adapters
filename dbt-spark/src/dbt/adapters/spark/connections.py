@@ -215,7 +215,7 @@ class SparkCredentials(Credentials):
 
     @property
     def unique_field(self) -> str:
-        return self.host  # type: ignore
+        return self.host or self.schema  # type: ignore
 
     def _connection_keys(self) -> Tuple[str, ...]:
         return "host", "port", "cluster", "endpoint", "schema", "organization"
