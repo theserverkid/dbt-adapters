@@ -55,9 +55,11 @@ jobs:
       - name: Show package version
         working-directory: dbt-spark
         run: |
+          # Read __version__.py directly to avoid importing dbt dependencies
           python -c "
-          import sys; sys.path.insert(0, 'src')
-          from dbt.adapters.spark.__version__ import version
+          import ast, pathlib
+          src = pathlib.Path('src/dbt/adapters/spark/__version__.py').read_text()
+          version = ast.literal_eval(ast.parse(src).body[0].value)
           print(f'Building dbt-spark-submit=={version}')
           "
 
