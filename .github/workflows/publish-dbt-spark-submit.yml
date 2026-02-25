@@ -1,10 +1,18 @@
-name: Release dbt-spark-submit
+name: Release and publish dbt-spark-submit
 
 # Triggers on every human push to spark-submit.
-# 1. Finds the latest "dbt-spark-submit-v*" tag and bumps the patch number.
+# 1. Computes the next patch version from existing git tags.
 # 2. Pushes the new tag.
-# 3. Creates a GitHub Release from that tag.
-# The PyPI publish workflow fires automatically on the release event.
+# 3. Builds the wheel/sdist (hatch-vcs reads version from the tag).
+# 4. Publishes to PyPI via OIDC trusted publishing.
+# 5. Creates a GitHub Release.
+#
+# One-time setup on PyPI (https://pypi.org/manage/account/publishing/):
+#   Package name:      dbt-spark-submit
+#   Owner:             <your-github-username>
+#   Repository:        <your-fork-repo-name>
+#   Workflow filename: publish-dbt-spark-submit.yml
+#   Environment name:  pypi
 
 on:
   push:
@@ -12,47 +20,69 @@ on:
       - spark-submit
 
 jobs:
-  release:
-    name: Tag and create GitHub Release
-    # Skip the bot's own commits (e.g. from other automation) to prevent loops.
+  release-and-publish:
+    name: Tag, publish to PyPI, and create GitHub Release
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
+    environment: pypi
     permissions:
-      contents: write  # needed to push tags and create the release
+      id-token: write  # OIDC trusted publishing
+      contents: write  # push tags and create release
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # full history so we can find all existing tags
+          fetch-depth: 0
 
       - name: Compute next version tag
         id: tag
         run: |
-          # Find the highest existing dbt-spark-submit-vX.Y.Z tag
           latest=$(git tag --list 'dbt-spark-submit-v*' \
             | sort -t. -k1,1V -k2,2n -k3,3n \
             | tail -1)
 
           if [ -z "$latest" ]; then
-            # No tag yet — start at v1.0.0
             new_tag="dbt-spark-submit-v1.0.0"
           else
-            # Strip prefix, bump patch
             version="${latest#dbt-spark-submit-v}"
             IFS='.' read -r major minor patch <<< "$version"
             new_tag="dbt-spark-submit-v${major}.${minor}.$((patch + 1))"
           fi
 
-          echo "latest=${latest:-<none>}"
-          echo "new_tag=${new_tag}"
-          echo "new_tag=${new_tag}" >> "$GITHUB_OUTPUT"
+          echo "latest=${latest:-<none>}, new=${new_tag}"
+          echo "new_tag=${new_tag}"        >> "$GITHUB_OUTPUT"
           echo "version=${new_tag#dbt-spark-submit-v}" >> "$GITHUB_OUTPUT"
 
       - name: Push new tag
         run: |
           git tag "${{ steps.tag.outputs.new_tag }}"
           git push origin "${{ steps.tag.outputs.new_tag }}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install hatch and hatch-vcs
+        run: pip install --upgrade hatch hatch-vcs
+
+      - name: Build wheel and sdist
+        working-directory: dbt-spark
+        run: |
+          hatch version   # confirms tag-derived version
+          hatch build
+
+      - name: Verify with twine
+        working-directory: dbt-spark
+        run: |
+          pip install twine
+          twine check dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dbt-spark/dist/
 
       - name: Create GitHub Release
         env:
