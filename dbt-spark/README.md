@@ -91,6 +91,83 @@ If installing on MacOS, use `homebrew` to install required dependencies.
    brew install unixodbc
    ```
 
+## Configuring spark-submit and spark-sql methods
+
+The `spark_submit` and `spark_sql` connection methods run SQL and Python models locally using the Spark CLI tools. No `host` is required — dbt invokes `spark-submit` or `spark-sql` as subprocesses on the machine running dbt.
+
+### Requirements
+
+- A working Spark installation accessible via `SPARK_HOME` or on `PATH`.
+- For `spark_submit`: `spark-submit` must be executable.
+- For `spark_sql`: `spark-sql` must be executable.
+
+### spark-sql
+
+Use `spark_sql` when all your models are SQL-based. dbt executes each statement with `spark-sql -e '...'`.
+
+```yaml
+my_spark_project:
+  target: dev
+  outputs:
+    dev:
+      type: spark
+      method: spark_sql
+      schema: analytics
+      # Optional: explicit path to SPARK_HOME if not set in environment
+      spark_home: /opt/spark
+      # Optional: extra CLI flags passed to spark-sql
+      spark_sql_args:
+        - "--master"
+        - "local[*]"
+        - "--conf"
+        - "spark.executor.memory=4g"
+```
+
+### spark-submit
+
+Use `spark_submit` when your project includes Python models. dbt executes Python models via `spark-submit`. SQL statements (e.g. catalog introspection) fall back to the `spark-sql` CLI automatically.
+
+```yaml
+my_spark_project:
+  target: dev
+  outputs:
+    dev:
+      type: spark
+      method: spark_submit
+      schema: analytics
+      # Optional: explicit path to SPARK_HOME if not set in environment
+      spark_home: /opt/spark
+      # Optional: extra CLI flags passed to spark-submit for Python models
+      spark_submit_args:
+        - "--master"
+        - "local[*]"
+        - "--conf"
+        - "spark.executor.memory=4g"
+      # Optional: extra CLI flags passed to spark-sql for SQL statements
+      spark_sql_args:
+        - "--master"
+        - "local[*]"
+      # Optional: timeout in seconds for spark-submit jobs (default: no timeout)
+      spark_submit_timeout: 3600
+```
+
+### Profile fields
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `method` | Yes | — | `spark_sql` or `spark_submit` |
+| `schema` | Yes | — | The default schema (database) to use |
+| `spark_home` | No | `$SPARK_HOME` env var | Path to your Spark installation |
+| `spark_sql_args` | No | `[]` | Extra CLI flags for `spark-sql` |
+| `spark_submit_args` | No | `[]` | Extra CLI flags for `spark-submit` (Python models only) |
+| `spark_submit_timeout` | No | `null` (no timeout) | Max seconds to wait for a `spark-submit` job |
+
+### Notes
+
+- Neither method requires `host`, `port`, or `token`.
+- `spark_submit` only invokes `spark-submit` for Python models. All SQL (including dbt internals) uses `spark-sql`.
+- If `spark_home` is not set in the profile, dbt falls back to the `SPARK_HOME` environment variable, then to looking up `spark-sql`/`spark-submit` on `PATH`.
+
 ## Contribute
 
 - Want to help us build `dbt-spark`? Check out the [Contributing Guide](CONTRIBUTING.md).

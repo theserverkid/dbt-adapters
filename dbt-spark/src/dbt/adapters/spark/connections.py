@@ -442,8 +442,17 @@ class PyodbcConnectionWrapper(PyhiveConnectionWrapper):
             self._cursor.execute(sql, *bindings)
 
 
+_IMMEDIATE_PREFIXES = ("select", "show", "describe", "explain", "with")
+
+
 class SparkSqlCliConnectionWrapper(SparkConnectionWrapper):
-    """Execute SQL via the spark-sql CLI (spark-sql -e '...')."""
+    """Execute SQL via the spark-sql CLI (spark-sql -e '...').
+
+    DDL/DML statements (CREATE, DROP, INSERT, etc.) are buffered and submitted
+    as a single batch via ``spark-sql -f <file>`` when a result-returning query
+    arrives or when the connection is closed.  This avoids spinning up a new
+    Spark application (K8s pod) for every individual statement.
+    """
 
     def __init__(self, spark_home: Optional[str], extra_args: List[str], schema: str) -> None:
         self._spark_home = spark_home
@@ -453,12 +462,17 @@ class SparkSqlCliConnectionWrapper(SparkConnectionWrapper):
         self._description: Sequence[
             Tuple[str, Any, Optional[int], Optional[int], Optional[int], Optional[int], bool]
         ] = []
+        self._pending: List[str] = []  # buffered DDL statements
 
     def _spark_sql_bin(self) -> str:
         home = self._spark_home or os.environ.get("SPARK_HOME", "")
         if home:
             return os.path.join(home, "bin", "spark-sql")
         return "spark-sql"
+
+    def _needs_result(self, sql: str) -> bool:
+        """Return True for statements whose output dbt reads immediately."""
+        return sql.strip().lstrip("(").lower().startswith(_IMMEDIATE_PREFIXES)
 
     def cursor(self) -> "SparkSqlCliConnectionWrapper":
         return self
@@ -467,7 +481,7 @@ class SparkSqlCliConnectionWrapper(SparkConnectionWrapper):
         pass
 
     def close(self) -> None:
-        pass
+        self._flush()
 
     def rollback(self) -> None:
         logger.debug("NotImplemented: rollback")
@@ -479,9 +493,55 @@ class SparkSqlCliConnectionWrapper(SparkConnectionWrapper):
         if sql.strip().endswith(";"):
             sql = sql.strip()[:-1]
 
-        # Prepend USE schema so objects resolve correctly
-        full_sql = f"USE {self._schema};\n{sql}"
+        if self._needs_result(sql):
+            # Flush any pending DDL first so schema state is consistent, then
+            # run this query immediately so dbt can read its results.
+            self._flush()
+            self._run_immediate(f"USE {self._schema};\n{sql}")
+        else:
+            # Buffer DDL/DML; USE schema will be prepended at flush time.
+            self._pending.append(sql)
+            self._rows = []
+            self._description = []
 
+    def _flush(self) -> None:
+        """Submit all buffered DDL statements as a single spark-sql -f job."""
+        if not self._pending:
+            return
+        stmts = [f"USE {self._schema}"] + self._pending
+        sql_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".sql", prefix="dbt_spark_batch_", delete=False
+        )
+        try:
+            sql_file.write(";\n".join(stmts) + ";")
+            sql_file.close()
+            cmd = [self._spark_sql_bin()] + self._extra_args + ["-f", sql_file.name]
+            logger.debug("spark-sql batch command: {}".format(cmd))
+            try:
+                result = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                )
+            except FileNotFoundError as e:
+                raise DbtRuntimeError(
+                    f"Could not find spark-sql binary. "
+                    f"Set spark_home in your profile or ensure spark-sql is on PATH.\n"
+                    f"Original error: {e}"
+                ) from e
+            if result.returncode != 0:
+                raise DbtDatabaseError(
+                    f"spark-sql batch exited with code {result.returncode}.\n"
+                    f"stderr: {result.stderr}\nstdout: {result.stdout}"
+                )
+        finally:
+            os.unlink(sql_file.name)
+            self._pending = []
+
+    def _run_immediate(self, full_sql: str) -> None:
+        """Run a single SQL string via spark-sql -e and capture output."""
         cmd = [self._spark_sql_bin()] + self._extra_args + ["-e", full_sql]
         logger.debug("spark-sql command: {}".format(cmd))
 
