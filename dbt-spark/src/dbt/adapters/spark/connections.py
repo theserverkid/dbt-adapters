@@ -177,7 +177,11 @@ class SparkCredentials(Credentials):
         if (
             self.method == SparkConnectionMethod.HTTP
             or self.method == SparkConnectionMethod.THRIFT
-            or (self.method == SparkConnectionMethod.SPARK_SQL and self.host is not None)
+            or (
+                self.method
+                in (SparkConnectionMethod.SPARK_SQL, SparkConnectionMethod.SPARK_SUBMIT)
+                and self.host is not None
+            )
         ) and not (ThriftState and THttpClient and hive):
             raise DbtRuntimeError(
                 f"{self.method} connection method requires "
@@ -200,7 +204,6 @@ class SparkCredentials(Credentials):
 
         if self.host is not None and self.method not in (
             SparkConnectionMethod.SESSION,
-            SparkConnectionMethod.SPARK_SUBMIT,
         ):
             self.host = self.host.rstrip("/")
 
@@ -653,6 +656,43 @@ class SparkConnectionManager(SQLConnectionManager):
                 )
 
     @classmethod
+    def _open_thrift(cls, creds: "SparkCredentials") -> PyhiveConnectionWrapper:
+        """Open a pyhive connection to a long-running HiveThriftServer2."""
+        cls.validate_creds(creds, ["host", "port", "schema"])
+        if creds.use_ssl:
+            transport = build_ssl_transport(
+                host=creds.host,
+                port=creds.port,
+                username=creds.user,
+                auth=creds.auth,
+                kerberos_service_name=creds.kerberos_service_name,
+                password=creds.password,
+            )
+            conn = hive.connect(
+                thrift_transport=transport,
+                configuration=creds.server_side_parameters,
+            )
+        else:
+            conn = hive.connect(
+                host=creds.host,
+                port=creds.port,
+                username=creds.user,
+                auth=creds.auth,
+                kerberos_service_name=creds.kerberos_service_name,
+                password=creds.password,
+                configuration=creds.server_side_parameters,
+            )
+        handle = PyhiveConnectionWrapper(
+            conn,
+            poll_interval=creds.poll_interval,
+            query_timeout=creds.query_timeout,
+            query_retries=creds.query_retries,
+        )
+        if creds.spark_history_server:
+            logger.debug("Spark History Server: {}".format(creds.spark_history_server))
+        return handle
+
+    @classmethod
     def open(cls, connection: Connection) -> Connection:
         if connection.state == ConnectionState.OPEN:
             logger.debug("Connection is already open, skipping open.")
@@ -698,37 +738,7 @@ class SparkConnectionManager(SQLConnectionManager):
                         query_retries=creds.query_retries,
                     )
                 elif creds.method == SparkConnectionMethod.THRIFT:
-                    cls.validate_creds(creds, ["host", "port", "user", "schema"])
-
-                    if creds.use_ssl:
-                        transport = build_ssl_transport(
-                            host=creds.host,
-                            port=creds.port,
-                            username=creds.user,
-                            auth=creds.auth,
-                            kerberos_service_name=creds.kerberos_service_name,
-                            password=creds.password,
-                        )
-                        conn = hive.connect(
-                            thrift_transport=transport,
-                            configuration=creds.server_side_parameters,
-                        )
-                    else:
-                        conn = hive.connect(
-                            host=creds.host,
-                            port=creds.port,
-                            username=creds.user,
-                            auth=creds.auth,
-                            kerberos_service_name=creds.kerberos_service_name,
-                            password=creds.password,
-                            configuration=creds.server_side_parameters,
-                        )  # noqa
-                    handle = PyhiveConnectionWrapper(
-                        conn,
-                        poll_interval=creds.poll_interval,
-                        query_timeout=creds.query_timeout,
-                        query_retries=creds.query_retries,
-                    )
+                    handle = cls._open_thrift(creds)
                 elif creds.method == SparkConnectionMethod.ODBC:
                     if creds.cluster is not None:
                         required_fields = [
@@ -808,40 +818,7 @@ class SparkConnectionManager(SQLConnectionManager):
                     if creds.host is not None:
                         # Thrift server mode: connect to a long-running HiveThriftServer2
                         # instead of spawning a new Spark CLI process per batch.
-                        cls.validate_creds(creds, ["host", "port", "schema"])
-                        if creds.use_ssl:
-                            transport = build_ssl_transport(
-                                host=creds.host,
-                                port=creds.port,
-                                username=creds.user,
-                                auth=creds.auth,
-                                kerberos_service_name=creds.kerberos_service_name,
-                                password=creds.password,
-                            )
-                            conn = hive.connect(
-                                thrift_transport=transport,
-                                configuration=creds.server_side_parameters,
-                            )
-                        else:
-                            conn = hive.connect(
-                                host=creds.host,
-                                port=creds.port,
-                                username=creds.user,
-                                auth=creds.auth,
-                                kerberos_service_name=creds.kerberos_service_name,
-                                password=creds.password,
-                                configuration=creds.server_side_parameters,
-                            )
-                        handle = PyhiveConnectionWrapper(
-                            conn,
-                            poll_interval=creds.poll_interval,
-                            query_timeout=creds.query_timeout,
-                            query_retries=creds.query_retries,
-                        )
-                        if creds.spark_history_server:
-                            logger.debug(
-                                "Spark History Server: {}".format(creds.spark_history_server)
-                            )
+                        handle = cls._open_thrift(creds)
                     else:
                         # CLI mode: invoke spark-sql as a subprocess (no long-running server).
                         handle = SparkSqlCliConnectionWrapper(
@@ -850,14 +827,18 @@ class SparkConnectionManager(SQLConnectionManager):
                             schema=creds.schema,
                         )
                 elif creds.method == SparkConnectionMethod.SPARK_SUBMIT:
-                    # spark-submit is used only for Python model execution (PythonJobHelper).
+                    # spark-submit handles Python models via PythonJobHelper.
                     # For SQL statements issued by dbt internals (e.g. show schemas) we
-                    # fall back to spark-sql so the adapter can still introspect the metastore.
-                    handle = SparkSqlCliConnectionWrapper(
-                        spark_home=creds.spark_home,
-                        extra_args=creds.spark_sql_args,
-                        schema=creds.schema,
-                    )
+                    # fall back to thrift (when host is set) or spark-sql CLI so the adapter
+                    # can still introspect the metastore.
+                    if creds.host is not None:
+                        handle = cls._open_thrift(creds)
+                    else:
+                        handle = SparkSqlCliConnectionWrapper(
+                            spark_home=creds.spark_home,
+                            extra_args=creds.spark_sql_args,
+                            schema=creds.schema,
+                        )
                 else:
                     raise DbtConfigError(f"invalid credential method: {creds.method}")
                 break

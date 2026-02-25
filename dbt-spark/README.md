@@ -195,7 +195,32 @@ my_spark_project:
 
 ### spark-submit
 
-Use `spark_submit` when your project includes Python models. dbt executes Python models via `spark-submit`. SQL statements (e.g. catalog introspection) fall back to the `spark-sql` CLI automatically.
+Use `spark_submit` when your project includes Python models. dbt executes Python models via `spark-submit`. SQL statements (e.g. catalog introspection) fall back to thrift when `host` is set, or to the `spark-sql` CLI otherwise.
+
+**With a thrift server (recommended):**
+
+```yaml
+my_spark_project:
+  target: dev
+  outputs:
+    dev:
+      type: spark
+      method: spark_submit
+      host: 127.0.0.1
+      port: 10000
+      schema: analytics
+      user: dbt
+      spark_history_server: http://127.0.0.1:18080
+      # Extra CLI flags for spark-submit (Python models only)
+      spark_submit_args:
+        - "--master"
+        - "local[*]"
+        - "--conf"
+        - "spark.executor.memory=4g"
+      spark_submit_timeout: 3600
+```
+
+**CLI only (no thrift server):**
 
 ```yaml
 my_spark_project:
@@ -205,19 +230,15 @@ my_spark_project:
       type: spark
       method: spark_submit
       schema: analytics
-      # Optional: explicit path to SPARK_HOME if not set in environment
       spark_home: /opt/spark
-      # Optional: extra CLI flags passed to spark-submit for Python models
       spark_submit_args:
         - "--master"
         - "local[*]"
         - "--conf"
         - "spark.executor.memory=4g"
-      # Optional: extra CLI flags passed to spark-sql for SQL statements
       spark_sql_args:
         - "--master"
         - "local[*]"
-      # Optional: timeout in seconds for spark-submit jobs (default: no timeout)
       spark_submit_timeout: 3600
 ```
 
@@ -227,7 +248,7 @@ my_spark_project:
 |---|---|---|---|
 | `method` | Yes | — | `spark_sql` or `spark_submit` |
 | `schema` | Yes | — | The default schema (database) to use |
-| `host` | No | — | Thrift server hostname. When set, `spark_sql` connects via Thrift instead of CLI |
+| `host` | No | — | Thrift server hostname. When set, `spark_sql` and `spark_submit` connect via Thrift instead of CLI |
 | `port` | No | `443` | Thrift server port (typically `10000`) |
 | `user` | No | — | Username for thrift server authentication |
 | `auth` | No | — | Auth mechanism for thrift (e.g. `NONE`, `LDAP`, `KERBEROS`) |
@@ -244,10 +265,11 @@ my_spark_project:
 
 ### Notes
 
-- `spark_sql` thrift server mode requires `pip install dbt-spark[PyHive]`.
-- `spark_submit` only invokes `spark-submit` for Python models. All SQL (including dbt internals) uses `spark-sql` CLI.
-- If `spark_home` is not set in the profile, dbt falls back to the `SPARK_HOME` environment variable, then to looking up `spark-sql`/`spark-submit` on `PATH`.
-- To use the Spark History Server, enable event logging on the thrift server (`spark.eventLog.enabled=true`) and start `$SPARK_HOME/sbin/start-history-server.sh`.
+- Thrift server mode (`host` set) requires `pip install dbt-spark[PyHive]` for both `spark_sql` and `spark_submit`.
+- `spark_submit` only invokes `spark-submit` for Python models. SQL statements use thrift when `host` is set, otherwise `spark-sql` CLI.
+- `spark_sql_args` is only used in CLI mode; it is ignored when `host` is set.
+- If `spark_home` is not set in the profile, dbt falls back to the `SPARK_HOME` environment variable, then to `spark-sql`/`spark-submit` on `PATH`.
+- The Spark History Server requires event logging on the thrift server (`spark.eventLog.enabled=true`). The bundled docker-compose configures this automatically.
 
 ## Contribute
 
