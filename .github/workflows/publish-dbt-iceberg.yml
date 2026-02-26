@@ -1,4 +1,4 @@
-name: Release and publish dbt-spark-submit
+name: Release and publish dbt-iceberg
 
 # Triggers on every human push to spark-submit.
 # 1. Computes the next patch version from existing git tags.
@@ -8,10 +8,10 @@ name: Release and publish dbt-spark-submit
 # 5. Creates a GitHub Release.
 #
 # One-time setup on PyPI (https://pypi.org/manage/account/publishing/):
-#   Package name:      dbt-spark-submit
+#   Package name:      dbt-iceberg
 #   Owner:             <your-github-username>
 #   Repository:        <your-fork-repo-name>
-#   Workflow filename: publish-dbt-spark-submit.yml
+#   Workflow filename: publish-dbt-iceberg.yml
 #   Environment name:  pypi
 
 on:
@@ -38,21 +38,21 @@ jobs:
       - name: Compute next version tag
         id: tag
         run: |
-          latest=$(git tag --list 'dbt-spark-submit-v*' \
+          latest=$(git tag --list 'dbt-iceberg-v*' \
             | sort -t. -k1,1V -k2,2n -k3,3n \
             | tail -1)
 
           if [ -z "$latest" ]; then
-            new_tag="dbt-spark-submit-v1.0.0"
+            new_tag="dbt-iceberg-v1.0.0"
           else
-            version="${latest#dbt-spark-submit-v}"
+            version="${latest#dbt-iceberg-v}"
             IFS='.' read -r major minor patch <<< "$version"
-            new_tag="dbt-spark-submit-v${major}.${minor}.$((patch + 1))"
+            new_tag="dbt-iceberg-v${major}.${minor}.$((patch + 1))"
           fi
 
           echo "latest=${latest:-<none>}, new=${new_tag}"
           echo "new_tag=${new_tag}"        >> "$GITHUB_OUTPUT"
-          echo "version=${new_tag#dbt-spark-submit-v}" >> "$GITHUB_OUTPUT"
+          echo "version=${new_tag#dbt-iceberg-v}" >> "$GITHUB_OUTPUT"
 
       - name: Push new tag
         run: |
@@ -70,13 +70,13 @@ jobs:
         run: pip install --upgrade hatch hatch-vcs "virtualenv<20.27"
 
       - name: Build wheel and sdist
-        working-directory: dbt-spark
+        working-directory: dbt-iceberg
         run: |
           hatch version   # confirms tag-derived version
           hatch build
 
       - name: Verify with twine
-        working-directory: dbt-spark
+        working-directory: dbt-iceberg
         run: |
           pip install twine
           twine check dist/*
@@ -84,7 +84,7 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: dbt-spark/dist/
+          packages-dir: dbt-iceberg/dist/
 
       - name: Create GitHub Release
         env:
@@ -92,6 +92,6 @@ jobs:
         run: |
           gh release create "${{ steps.tag.outputs.new_tag }}" \
             --target spark-submit \
-            --title "dbt-spark-submit v${{ steps.tag.outputs.version }}" \
-            --notes "Automated release of dbt-spark-submit v${{ steps.tag.outputs.version }}." \
+            --title "dbt-iceberg v${{ steps.tag.outputs.version }}" \
+            --notes "Automated release of dbt-iceberg v${{ steps.tag.outputs.version }}." \
             --latest

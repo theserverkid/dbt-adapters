@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+dynamic = ["version"]
+name = "dbt-iceberg"
+description = "The Apache Iceberg adapter plugin for dbt with spark-submit and spark-sql CLI support"
+readme = "README.md"
+keywords = ["dbt", "adapter", "adapters", "database", "elt", "dbt-core", "spark", "iceberg", "spark-submit", "spark-sql"]
+requires-python = ">=3.10.0"
+authors = [{ name = "dbt Labs", email = "info@dbtlabs.com" }]
+maintainers = [{ name = "dbt Labs", email = "info@dbtlabs.com" }]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "dbt-common>=1.10,<2.0",
+    "dbt-adapters>=1.7,<2.0",
+    # add dbt-core to ensure backwards compatibility of installation, this is not a functional dependency
+    "dbt-core>=1.8.0",
+    "sqlparams>=3.0.0",
+]
+[project.optional-dependencies]
+ODBC = ["pyodbc>=5.1,<5.3"]
+PyHive = [
+    "PyHive[hive_pure_sasl]~=0.7.0",
+    "thrift>=0.11.0,<0.17.0",
+]
+session = ["pyspark>=3.0.0,<5.0.0"]
+# duckdb engine support (planned — not yet implemented)
+duckdb = ["duckdb>=0.10.0"]
+all = [
+    "pyodbc>=5.1,<5.3",
+    "PyHive[hive_pure_sasl]~=0.7.0",
+    "thrift>=0.11.0,<0.17.0",
+    "pyspark>=3.0.0,<5.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/dbt-labs/dbt-adapters/tree/main/dbt-iceberg"
+Documentation = "https://docs.getdbt.com"
+Repository = "https://github.com/dbt-labs/dbt-adapters.git#subdirectory=dbt-iceberg"
+Issues = "https://github.com/dbt-labs/dbt-adapters/issues"
+Changelog = "https://github.com/dbt-labs/dbt-adapters/blob/main/dbt-iceberg/CHANGELOG.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit", "tests/functional"]
+addopts = "-v --color=yes -n auto"
+env_files = ["test.env"]
+filterwarnings = [
+    "ignore:.*'soft_unicode' has been renamed to 'soft_str'*:DeprecationWarning",
+    "ignore:unclosed file .*:ResourceWarning",
+]

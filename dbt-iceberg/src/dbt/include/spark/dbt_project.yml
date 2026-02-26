@@ -1,0 +1,14 @@
+name: dbt_iceberg
+version: 1.0
+config-version: 2
+
+macro-paths: ["macros"]
+
+# Engine configuration — controls which query engine dbt-iceberg uses.
+# Currently supported: spark (default)
+# Future engines (planned): duckdb
+# Override in your project's dbt_project.yml:
+#   vars:
+#     dbt_iceberg_engine: spark
+vars:
+  dbt_iceberg_engine: spark
