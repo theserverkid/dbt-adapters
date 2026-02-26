@@ -68,7 +68,7 @@
 {% endmacro %}
 
 
-{% macro dbt_spark_get_incremental_sql(strategy, source, target, existing, unique_key, incremental_predicates) %}
+{% macro dbt_iceberg_get_incremental_sql(strategy, source, target, existing, unique_key, incremental_predicates) %}
   {%- if strategy == 'append' -%}
     {#-- insert new records into existing table, without updating or overwriting #}
     {{ get_insert_into_sql(source, target) }}
@@ -78,7 +78,7 @@
   {%- elif strategy == 'microbatch' -%}
     {#-- microbatch wraps insert_overwrite, and requires a partition_by config #}
     {% set missing_partition_key_microbatch_msg -%}
-      dbt-spark 'microbatch' incremental strategy requires a `partition_by` config.
+      dbt-iceberg 'microbatch' incremental strategy requires a `partition_by` config.
       Ensure you are using a `partition_by` column that is of grain {{ config.get('batch_size') }}.
     {%- endset %}
 

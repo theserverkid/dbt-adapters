@@ -12,7 +12,7 @@ from dbt.adapters.sql import SQLConnectionManager
 from dbt_common.exceptions import DbtConfigError, DbtRuntimeError, DbtDatabaseError
 
 from dbt_common.utils.encoding import DECIMALS
-from dbt.adapters.spark import __version__
+from dbt.adapters.iceberg import __version__
 
 try:
     from TCLIService.ttypes import TOperationState as ThriftState

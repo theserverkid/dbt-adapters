@@ -33,10 +33,10 @@ if TYPE_CHECKING:
 from dbt.adapters.base import AdapterConfig, PythonJobHelper
 from dbt.adapters.base.impl import catch_as_completed, ConstraintSupport
 from dbt.adapters.sql import SQLAdapter
-from dbt.adapters.spark import SparkConnectionManager
-from dbt.adapters.spark import SparkRelation
-from dbt.adapters.spark import SparkColumn
-from dbt.adapters.spark.python_submissions import (
+from dbt.adapters.iceberg import SparkConnectionManager
+from dbt.adapters.iceberg import SparkRelation
+from dbt.adapters.iceberg import SparkColumn
+from dbt.adapters.iceberg.python_submissions import (
     JobClusterPythonJobHelper,
     AllPurposeClusterPythonJobHelper,
     SparkSubmitPythonJobHelper,
@@ -489,7 +489,7 @@ class SparkAdapter(SQLAdapter):
 
     @property
     def default_python_submission_method(self) -> str:
-        from dbt.adapters.spark.connections import SparkConnectionMethod
+        from dbt.adapters.iceberg.connections import SparkConnectionMethod
 
         creds = self.config.credentials
         if getattr(creds, "method", None) in (

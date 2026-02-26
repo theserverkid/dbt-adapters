@@ -5,7 +5,7 @@ import unittest
 from unittest import mock
 
 from dbt_common.exceptions import DbtRuntimeError, DbtDatabaseError
-from dbt.adapters.spark.connections import PyhiveConnectionWrapper
+from dbt.adapters.iceberg.connections import PyhiveConnectionWrapper
 
 try:
     from TCLIService.ttypes import TOperationState as ThriftState
@@ -22,7 +22,7 @@ class TestPyhivePolling(unittest.TestCase):
         self.mock_cursor = mock.MagicMock()
         self.mock_connection.cursor.return_value = self.mock_cursor
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_polling_sleeps_between_polls(self, mock_sleep):
         """Verify that polling actually sleeps between poll attempts."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=5)
@@ -43,8 +43,8 @@ class TestPyhivePolling(unittest.TestCase):
         self.assertEqual(mock_sleep.call_count, 2)
         mock_sleep.assert_called_with(5)
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
-    @mock.patch("dbt.adapters.spark.connections.time.time")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.time")
     def test_query_timeout_enforced(self, mock_time, mock_sleep):
         """Verify that query timeout is enforced when configured."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=5, query_timeout=10)
@@ -65,8 +65,8 @@ class TestPyhivePolling(unittest.TestCase):
         self.assertIn("exceeded timeout", str(context.exception))
         self.assertIn("10 seconds", str(context.exception))
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
-    @mock.patch("dbt.adapters.spark.connections.time.time")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.time")
     def test_query_timeout_zero(self, mock_time, mock_sleep):
         """Verify that query_timeout of 0 causes immediate timeout."""
         wrapper = PyhiveConnectionWrapper(
@@ -90,7 +90,7 @@ class TestPyhivePolling(unittest.TestCase):
         self.assertIn("exceeded timeout", error_msg.lower())
         self.assertIn("0 second", error_msg)
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_connection_lost_during_polling_ttransport(self, mock_sleep):
         """Verify that TTransportException during polling is handled gracefully."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=5, query_retries=0)
@@ -115,7 +115,7 @@ class TestPyhivePolling(unittest.TestCase):
         # Verify original exception type is included
         self.assertIn("ttransportexception", error_msg)
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_connection_reset_during_polling(self, mock_sleep):
         """Verify that ConnectionResetError during polling is handled."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=5, query_retries=0)
@@ -136,7 +136,7 @@ class TestPyhivePolling(unittest.TestCase):
         self.assertIn("connection lost", error_msg)
         self.assertIn("connectionreseterror", error_msg)
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_broken_pipe_during_polling(self, mock_sleep):
         """Verify that BrokenPipeError during polling is handled."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=5, query_retries=0)
@@ -157,7 +157,7 @@ class TestPyhivePolling(unittest.TestCase):
         self.assertIn("connection lost", error_msg)
         self.assertIn("brokenpipeerror", error_msg)
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_eof_error_during_polling(self, mock_sleep):
         """Verify that EOFError during polling is handled."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=5, query_retries=0)
@@ -178,7 +178,7 @@ class TestPyhivePolling(unittest.TestCase):
         self.assertIn("connection lost", error_msg)
         self.assertIn("eoferror", error_msg)
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_no_timeout_by_default(self, mock_sleep):
         """Verify that queries can run indefinitely if no timeout is set."""
         wrapper = PyhiveConnectionWrapper(
@@ -199,7 +199,7 @@ class TestPyhivePolling(unittest.TestCase):
         # Verify it polled many times
         self.assertEqual(mock_sleep.call_count, 100)
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_error_message_from_server(self, mock_sleep):
         """Verify that error messages from the server are properly raised."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=5)
@@ -217,7 +217,7 @@ class TestPyhivePolling(unittest.TestCase):
 
         self.assertIn("Table not found", str(context.exception))
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_cancelled_query_raises_error(self, mock_sleep):
         """Verify that cancelled queries raise an appropriate error."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=5)
@@ -235,7 +235,7 @@ class TestPyhivePolling(unittest.TestCase):
 
         self.assertIn("CANCELED", str(context.exception))
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_custom_poll_interval(self, mock_sleep):
         """Verify that custom poll interval is respected."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=10)
@@ -254,7 +254,7 @@ class TestPyhivePolling(unittest.TestCase):
         # Verify sleep was called with custom interval
         mock_sleep.assert_called_once_with(10)
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_non_connection_exception_reraised(self, mock_sleep):
         """Verify that non-connection exceptions are re-raised as-is."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=5, query_retries=0)
@@ -273,7 +273,7 @@ class TestPyhivePolling(unittest.TestCase):
 
         self.assertIn("unexpected error", str(context.exception))
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_exception_caught_by_type_not_message(self, mock_sleep):
         """Verify that exceptions are caught by type, not by parsing message strings."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=5, query_retries=0)
@@ -301,7 +301,7 @@ class TestPyhivePolling(unittest.TestCase):
         # Should include original message even though it's unusual
         self.assertIn("xyz123", error_msg)
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_chained_exception_preserved(self, mock_sleep):
         """Verify that exception chaining is preserved for connection errors."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=5, query_retries=0)
@@ -323,7 +323,7 @@ class TestPyhivePolling(unittest.TestCase):
         self.assertIsNotNone(context.exception.__cause__)
         self.assertIsInstance(context.exception.__cause__, ConnectionResetError)
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_query_retry_on_connection_loss(self, mock_sleep):
         """Verify that queries are retried on connection loss."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=5, query_retries=2)
@@ -353,7 +353,7 @@ class TestPyhivePolling(unittest.TestCase):
         # Verify sleep was called for polling + retry delay
         self.assertGreater(mock_sleep.call_count, 1)
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_query_retry_exhausted(self, mock_sleep):
         """Verify that error is raised when all retries are exhausted."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=5, query_retries=1)
@@ -383,7 +383,7 @@ class TestPyhivePolling(unittest.TestCase):
         self.assertIn("after 2 attempts", error_msg)
         self.assertIn("consider increasing 'query_retries'", error_msg.lower())
 
-    @mock.patch("dbt.adapters.spark.connections.time.sleep")
+    @mock.patch("dbt.adapters.iceberg.connections.time.sleep")
     def test_no_retry_on_database_errors(self, mock_sleep):
         """Verify that database errors are not retried, only connection errors."""
         wrapper = PyhiveConnectionWrapper(self.mock_connection, poll_interval=5, query_retries=2)

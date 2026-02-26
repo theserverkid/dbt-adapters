@@ -4,8 +4,8 @@
   {%- set raw_strategy = config.get('incremental_strategy') or 'append' -%}
   {%- set grant_config = config.get('grants') -%}
 
-  {%- set file_format = dbt_spark_validate_get_file_format(raw_file_format) -%}
-  {%- set strategy = dbt_spark_validate_get_incremental_strategy(raw_strategy, file_format) -%}
+  {%- set file_format = dbt_iceberg_validate_get_file_format(raw_file_format) -%}
+  {%- set strategy = dbt_iceberg_validate_get_incremental_strategy(raw_strategy, file_format) -%}
 
   {#-- Set vars --#}
 
@@ -57,12 +57,12 @@
     {%- endcall -%}
     {%- do process_schema_changes(on_schema_change, tmp_relation, existing_relation) -%}
     {%- call statement('main') -%}
-      {{ dbt_spark_get_incremental_sql(strategy, tmp_relation, target_relation, existing_relation, unique_key, incremental_predicates) }}
+      {{ dbt_iceberg_get_incremental_sql(strategy, tmp_relation, target_relation, existing_relation, unique_key, incremental_predicates) }}
     {%- endcall -%}
     {%- if language == 'python' -%}
       {#--
       This is yucky.
-      See note in dbt-spark/dbt/include/spark/macros/adapters.sql
+      See note in dbt-iceberg/src/dbt/include/iceberg/macros/adapters.sql
       re: python models and temporary views.
 
       Also, why do neither drop_relation or adapter.drop_relation work here?!

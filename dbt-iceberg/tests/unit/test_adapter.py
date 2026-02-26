@@ -6,7 +6,7 @@ from unittest import mock
 from dbt.exceptions import DbtRuntimeError
 from agate import Row
 from pyhive import hive
-from dbt.adapters.spark import SparkAdapter, SparkRelation
+from dbt.adapters.iceberg import SparkAdapter, SparkRelation
 from .utils import config_from_parts_or_dicts
 
 ENFORCED_SPARK_CONFIG = {"spark.sql.ansi.enabled": "false"}
@@ -47,7 +47,7 @@ class TestSparkAdapter(unittest.TestCase):
             self.assertEqual(configuration["spark.driver.memory"], "4g")
 
         # with mock.patch.object(hive, 'connect', new=hive_http_connect):
-        with mock.patch("dbt.adapters.spark.connections.hive.connect", new=hive_http_connect):
+        with mock.patch("dbt.adapters.iceberg.connections.hive.connect", new=hive_http_connect):
             connection = adapter.acquire_connection("dummy")
             connection.handle  # trigger lazy-load
 
@@ -138,7 +138,7 @@ class TestSparkAdapter(unittest.TestCase):
             )  # noqa
 
         with mock.patch(
-            "dbt.adapters.spark.connections.pyodbc.connect", new=pyodbc_connect
+            "dbt.adapters.iceberg.connections.pyodbc.connect", new=pyodbc_connect
         ):  # noqa
             connection = adapter.acquire_connection("dummy")
             connection.handle  # trigger lazy-load
@@ -163,7 +163,7 @@ class TestSparkAdapter(unittest.TestCase):
             )  # noqa
 
         with mock.patch(
-            "dbt.adapters.spark.connections.pyodbc.connect", new=pyodbc_connect
+            "dbt.adapters.iceberg.connections.pyodbc.connect", new=pyodbc_connect
         ):  # noqa
             connection = adapter.acquire_connection("dummy")
             connection.handle  # trigger lazy-load
@@ -186,7 +186,7 @@ class TestSparkAdapter(unittest.TestCase):
             self.assertIn("someExtraValues", connection_str)
 
         with mock.patch(
-            "dbt.adapters.spark.connections.pyodbc.connect", new=pyodbc_connect
+            "dbt.adapters.iceberg.connections.pyodbc.connect", new=pyodbc_connect
         ):  # noqa
             connection = adapter.acquire_connection("dummy")
             connection.handle  # trigger lazy-load

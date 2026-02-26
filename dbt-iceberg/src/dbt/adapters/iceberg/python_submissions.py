@@ -10,8 +10,8 @@ import uuid
 from dbt.adapters.base import PythonJobHelper
 from dbt_common.exceptions import DbtRuntimeError
 
-from dbt.adapters.spark import SparkCredentials
-from dbt.adapters.spark import __version__
+from dbt.adapters.iceberg import SparkCredentials
+from dbt.adapters.iceberg import __version__
 
 DEFAULT_POLLING_INTERVAL = 10
 SUBMISSION_LANGUAGE = "python"

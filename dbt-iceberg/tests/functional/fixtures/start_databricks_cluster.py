@@ -11,7 +11,7 @@ try:
 except ImportError:
     pass
 
-from dbt.adapters.spark.connections import SparkConnectionManager
+from dbt.adapters.iceberg.connections import SparkConnectionManager
 
 
 HOST = "https://" + getenv("DBT_DATABRICKS_HOST_NAME")
