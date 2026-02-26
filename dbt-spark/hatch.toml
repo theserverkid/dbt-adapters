@@ -3,9 +3,6 @@ source = "vcs"
 tag-pattern = "dbt-spark-submit-v(?P<version>[^+]+)"
 fallback-version = "0.0.0"
 
-[version.raw-options]
-root = ".."
-
 [build.targets.wheel]
 packages = ["src/dbt"]
 sources = ["src"]

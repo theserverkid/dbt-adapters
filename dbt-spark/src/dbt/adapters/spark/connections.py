@@ -117,11 +117,8 @@ class SparkCredentials(Credentials):
     # spark-submit / spark-sql CLI settings
     spark_home: Optional[str] = None  # path to SPARK_HOME; uses $SPARK_HOME env var if unset
     spark_submit_args: List[str] = field(default_factory=list)  # extra args for spark-submit
-    spark_sql_args: List[str] = field(default_factory=list)  # extra args for spark-sql (CLI mode only)
+    spark_sql_args: List[str] = field(default_factory=list)  # extra args for spark-sql
     spark_submit_timeout: Optional[int] = None  # max seconds for spark-submit jobs (None = wait forever)
-
-    # spark-sql thrift server settings (when host is set, connects via thrift instead of CLI)
-    spark_history_server: Optional[str] = None  # URL of the Spark History Server UI (informational)
 
     @classmethod
     def __pre_deserialize__(cls, data: Any) -> Any:
@@ -177,11 +174,6 @@ class SparkCredentials(Credentials):
         if (
             self.method == SparkConnectionMethod.HTTP
             or self.method == SparkConnectionMethod.THRIFT
-            or (
-                self.method
-                in (SparkConnectionMethod.SPARK_SQL, SparkConnectionMethod.SPARK_SUBMIT)
-                and self.host is not None
-            )
         ) and not (ThriftState and THttpClient and hive):
             raise DbtRuntimeError(
                 f"{self.method} connection method requires "
@@ -202,8 +194,10 @@ class SparkCredentials(Credentials):
                     f"ImportError({e.msg})"
                 ) from e
 
-        if self.host is not None and self.method not in (
+        if self.method not in (
             SparkConnectionMethod.SESSION,
+            SparkConnectionMethod.SPARK_SUBMIT,
+            SparkConnectionMethod.SPARK_SQL,
         ):
             self.host = self.host.rstrip("/")
 
@@ -221,7 +215,7 @@ class SparkCredentials(Credentials):
 
     @property
     def unique_field(self) -> str:
-        return self.host or self.schema  # type: ignore
+        return self.host  # type: ignore
 
     def _connection_keys(self) -> Tuple[str, ...]:
         return "host", "port", "cluster", "endpoint", "schema", "organization"
@@ -448,17 +442,8 @@ class PyodbcConnectionWrapper(PyhiveConnectionWrapper):
             self._cursor.execute(sql, *bindings)
 
 
-_IMMEDIATE_PREFIXES = ("select", "show", "describe", "explain", "with")
-
-
 class SparkSqlCliConnectionWrapper(SparkConnectionWrapper):
-    """Execute SQL via the spark-sql CLI (spark-sql -e '...').
-
-    DDL/DML statements (CREATE, DROP, INSERT, etc.) are buffered and submitted
-    as a single batch via ``spark-sql -f <file>`` when a result-returning query
-    arrives or when the connection is closed.  This avoids spinning up a new
-    Spark application (K8s pod) for every individual statement.
-    """
+    """Execute SQL via the spark-sql CLI (spark-sql -e '...')."""
 
     def __init__(self, spark_home: Optional[str], extra_args: List[str], schema: str) -> None:
         self._spark_home = spark_home
@@ -468,17 +453,12 @@ class SparkSqlCliConnectionWrapper(SparkConnectionWrapper):
         self._description: Sequence[
             Tuple[str, Any, Optional[int], Optional[int], Optional[int], Optional[int], bool]
         ] = []
-        self._pending: List[str] = []  # buffered DDL statements
 
     def _spark_sql_bin(self) -> str:
         home = self._spark_home or os.environ.get("SPARK_HOME", "")
         if home:
             return os.path.join(home, "bin", "spark-sql")
         return "spark-sql"
-
-    def _needs_result(self, sql: str) -> bool:
-        """Return True for statements whose output dbt reads immediately."""
-        return sql.strip().lstrip("(").lower().startswith(_IMMEDIATE_PREFIXES)
 
     def cursor(self) -> "SparkSqlCliConnectionWrapper":
         return self
@@ -487,7 +467,7 @@ class SparkSqlCliConnectionWrapper(SparkConnectionWrapper):
         pass
 
     def close(self) -> None:
-        self._flush()
+        pass
 
     def rollback(self) -> None:
         logger.debug("NotImplemented: rollback")
@@ -499,55 +479,9 @@ class SparkSqlCliConnectionWrapper(SparkConnectionWrapper):
         if sql.strip().endswith(";"):
             sql = sql.strip()[:-1]
 
-        if self._needs_result(sql):
-            # Flush any pending DDL first so schema state is consistent, then
-            # run this query immediately so dbt can read its results.
-            self._flush()
-            self._run_immediate(f"USE {self._schema};\n{sql}")
-        else:
-            # Buffer DDL/DML; USE schema will be prepended at flush time.
-            self._pending.append(sql)
-            self._rows = []
-            self._description = []
+        # Prepend USE schema so objects resolve correctly
+        full_sql = f"USE {self._schema};\n{sql}"
 
-    def _flush(self) -> None:
-        """Submit all buffered DDL statements as a single spark-sql -f job."""
-        if not self._pending:
-            return
-        stmts = [f"USE {self._schema}"] + self._pending
-        sql_file = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".sql", prefix="dbt_spark_batch_", delete=False
-        )
-        try:
-            sql_file.write(";\n".join(stmts) + ";")
-            sql_file.close()
-            cmd = [self._spark_sql_bin()] + self._extra_args + ["-f", sql_file.name]
-            logger.debug("spark-sql batch command: {}".format(cmd))
-            try:
-                result = subprocess.run(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=False,
-                )
-            except FileNotFoundError as e:
-                raise DbtRuntimeError(
-                    f"Could not find spark-sql binary. "
-                    f"Set spark_home in your profile or ensure spark-sql is on PATH.\n"
-                    f"Original error: {e}"
-                ) from e
-            if result.returncode != 0:
-                raise DbtDatabaseError(
-                    f"spark-sql batch exited with code {result.returncode}.\n"
-                    f"stderr: {result.stderr}\nstdout: {result.stdout}"
-                )
-        finally:
-            os.unlink(sql_file.name)
-            self._pending = []
-
-    def _run_immediate(self, full_sql: str) -> None:
-        """Run a single SQL string via spark-sql -e and capture output."""
         cmd = [self._spark_sql_bin()] + self._extra_args + ["-e", full_sql]
         logger.debug("spark-sql command: {}".format(cmd))
 
@@ -656,43 +590,6 @@ class SparkConnectionManager(SQLConnectionManager):
                 )
 
     @classmethod
-    def _open_thrift(cls, creds: "SparkCredentials") -> PyhiveConnectionWrapper:
-        """Open a pyhive connection to a long-running HiveThriftServer2."""
-        cls.validate_creds(creds, ["host", "port", "schema"])
-        if creds.use_ssl:
-            transport = build_ssl_transport(
-                host=creds.host,
-                port=creds.port,
-                username=creds.user,
-                auth=creds.auth,
-                kerberos_service_name=creds.kerberos_service_name,
-                password=creds.password,
-            )
-            conn = hive.connect(
-                thrift_transport=transport,
-                configuration=creds.server_side_parameters,
-            )
-        else:
-            conn = hive.connect(
-                host=creds.host,
-                port=creds.port,
-                username=creds.user,
-                auth=creds.auth,
-                kerberos_service_name=creds.kerberos_service_name,
-                password=creds.password,
-                configuration=creds.server_side_parameters,
-            )
-        handle = PyhiveConnectionWrapper(
-            conn,
-            poll_interval=creds.poll_interval,
-            query_timeout=creds.query_timeout,
-            query_retries=creds.query_retries,
-        )
-        if creds.spark_history_server:
-            logger.debug("Spark History Server: {}".format(creds.spark_history_server))
-        return handle
-
-    @classmethod
     def open(cls, connection: Connection) -> Connection:
         if connection.state == ConnectionState.OPEN:
             logger.debug("Connection is already open, skipping open.")
@@ -738,7 +635,37 @@ class SparkConnectionManager(SQLConnectionManager):
                         query_retries=creds.query_retries,
                     )
                 elif creds.method == SparkConnectionMethod.THRIFT:
-                    handle = cls._open_thrift(creds)
+                    cls.validate_creds(creds, ["host", "port", "user", "schema"])
+
+                    if creds.use_ssl:
+                        transport = build_ssl_transport(
+                            host=creds.host,
+                            port=creds.port,
+                            username=creds.user,
+                            auth=creds.auth,
+                            kerberos_service_name=creds.kerberos_service_name,
+                            password=creds.password,
+                        )
+                        conn = hive.connect(
+                            thrift_transport=transport,
+                            configuration=creds.server_side_parameters,
+                        )
+                    else:
+                        conn = hive.connect(
+                            host=creds.host,
+                            port=creds.port,
+                            username=creds.user,
+                            auth=creds.auth,
+                            kerberos_service_name=creds.kerberos_service_name,
+                            password=creds.password,
+                            configuration=creds.server_side_parameters,
+                        )  # noqa
+                    handle = PyhiveConnectionWrapper(
+                        conn,
+                        poll_interval=creds.poll_interval,
+                        query_timeout=creds.query_timeout,
+                        query_retries=creds.query_retries,
+                    )
                 elif creds.method == SparkConnectionMethod.ODBC:
                     if creds.cluster is not None:
                         required_fields = [
@@ -815,30 +742,20 @@ class SparkConnectionManager(SQLConnectionManager):
                         Connection(server_side_parameters=creds.server_side_parameters)
                     )
                 elif creds.method == SparkConnectionMethod.SPARK_SQL:
-                    if creds.host is not None:
-                        # Thrift server mode: connect to a long-running HiveThriftServer2
-                        # instead of spawning a new Spark CLI process per batch.
-                        handle = cls._open_thrift(creds)
-                    else:
-                        # CLI mode: invoke spark-sql as a subprocess (no long-running server).
-                        handle = SparkSqlCliConnectionWrapper(
-                            spark_home=creds.spark_home,
-                            extra_args=creds.spark_sql_args,
-                            schema=creds.schema,
-                        )
+                    handle = SparkSqlCliConnectionWrapper(
+                        spark_home=creds.spark_home,
+                        extra_args=creds.spark_sql_args,
+                        schema=creds.schema,
+                    )
                 elif creds.method == SparkConnectionMethod.SPARK_SUBMIT:
-                    # spark-submit handles Python models via PythonJobHelper.
+                    # spark-submit is used only for Python model execution (PythonJobHelper).
                     # For SQL statements issued by dbt internals (e.g. show schemas) we
-                    # fall back to thrift (when host is set) or spark-sql CLI so the adapter
-                    # can still introspect the metastore.
-                    if creds.host is not None:
-                        handle = cls._open_thrift(creds)
-                    else:
-                        handle = SparkSqlCliConnectionWrapper(
-                            spark_home=creds.spark_home,
-                            extra_args=creds.spark_sql_args,
-                            schema=creds.schema,
-                        )
+                    # fall back to spark-sql so the adapter can still introspect the metastore.
+                    handle = SparkSqlCliConnectionWrapper(
+                        spark_home=creds.spark_home,
+                        extra_args=creds.spark_sql_args,
+                        schema=creds.schema,
+                    )
                 else:
                     raise DbtConfigError(f"invalid credential method: {creds.method}")
                 break
