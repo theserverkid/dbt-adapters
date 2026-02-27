@@ -1,5 +1,5 @@
 {% macro assert_not_null(function, arg) -%}
-  {{ return(adapter.dispatch('assert_not_null', 'dbt_iceberg')(function, arg)) }}
+  {{ return(adapter.dispatch('assert_not_null', 'dbt')(function, arg)) }}
 {%- endmacro %}
 
 {% macro iceberg__assert_not_null(function, arg) %}
