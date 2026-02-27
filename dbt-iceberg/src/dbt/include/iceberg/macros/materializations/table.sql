@@ -1,4 +1,4 @@
-{% materialization table, adapter = 'spark', supported_languages=['sql', 'python'] %}
+{% materialization table, adapter = 'iceberg', supported_languages=['sql', 'python'] %}
   {%- set language = model['language'] -%}
   {%- set identifier = model['alias'] -%}
   {%- set grant_config = config.get('grants') -%}

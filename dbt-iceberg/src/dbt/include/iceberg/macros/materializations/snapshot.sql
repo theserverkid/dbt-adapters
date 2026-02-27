@@ -86,7 +86,7 @@
 {% endmacro %}
 
 
-{% materialization snapshot, adapter='spark' %}
+{% materialization snapshot, adapter='iceberg' %}
 
   {%- set target_table = model.get('alias', model.get('name')) -%}
 

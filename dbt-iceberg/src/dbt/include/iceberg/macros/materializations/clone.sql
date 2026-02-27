@@ -6,7 +6,7 @@
     create or replace table {{ this_relation }} shallow clone {{ defer_relation }}
 {% endmacro %}
 
-{%- materialization clone, adapter='spark' -%}
+{%- materialization clone, adapter='iceberg' -%}
 
   {%- set relations = {'relations': []} -%}
 
