@@ -45,6 +45,9 @@ all = [
     "pyspark>=3.0.0,<5.0.0",
 ]
 
+[project.entry-points."dbt.adapters"]
+iceberg = "dbt.adapters.iceberg"
+
 [project.urls]
 Homepage = "https://github.com/dbt-labs/dbt-adapters/tree/main/dbt-iceberg"
 Documentation = "https://docs.getdbt.com"
