@@ -1,5 +1,5 @@
 {% macro tblproperties_clause() %}
-  {{ return(adapter.dispatch('tblproperties_clause', 'dbt')()) }}
+  {{ return(adapter.dispatch('tblproperties_clause', 'dbt_iceberg')()) }}
 {%- endmacro -%}
 
 {% macro spark__tblproperties_clause() -%}
@@ -14,7 +14,7 @@
 {%- endmacro -%}
 
 {% macro file_format_clause() %}
-  {{ return(adapter.dispatch('file_format_clause', 'dbt')()) }}
+  {{ return(adapter.dispatch('file_format_clause', 'dbt_iceberg')()) }}
 {%- endmacro -%}
 
 {% macro spark__file_format_clause() %}
@@ -26,7 +26,7 @@
 
 
 {% macro location_clause() %}
-  {{ return(adapter.dispatch('location_clause', 'dbt')()) }}
+  {{ return(adapter.dispatch('location_clause', 'dbt_iceberg')()) }}
 {%- endmacro -%}
 
 {% macro spark__location_clause() %}
@@ -39,7 +39,7 @@
 
 
 {% macro options_clause() -%}
-  {{ return(adapter.dispatch('options_clause', 'dbt')()) }}
+  {{ return(adapter.dispatch('options_clause', 'dbt_iceberg')()) }}
 {%- endmacro -%}
 
 {% macro spark__options_clause() -%}
@@ -66,7 +66,7 @@
 
 
 {% macro comment_clause() %}
-  {{ return(adapter.dispatch('comment_clause', 'dbt')()) }}
+  {{ return(adapter.dispatch('comment_clause', 'dbt_iceberg')()) }}
 {%- endmacro -%}
 
 {% macro spark__comment_clause() %}
@@ -84,7 +84,7 @@
 
 
 {% macro partition_cols(label, required=false) %}
-  {{ return(adapter.dispatch('partition_cols', 'dbt')(label, required)) }}
+  {{ return(adapter.dispatch('partition_cols', 'dbt_iceberg')(label, required)) }}
 {%- endmacro -%}
 
 {% macro spark__partition_cols(label, required=false) %}
@@ -104,7 +104,7 @@
 
 
 {% macro clustered_cols(label, required=false) %}
-  {{ return(adapter.dispatch('clustered_cols', 'dbt')(label, required)) }}
+  {{ return(adapter.dispatch('clustered_cols', 'dbt_iceberg')(label, required)) }}
 {%- endmacro -%}
 
 {% macro spark__clustered_cols(label, required=false) %}
@@ -133,7 +133,7 @@
 
 
 {% macro create_temporary_view(relation, compiled_code) -%}
-  {{ return(adapter.dispatch('create_temporary_view', 'dbt')(relation, compiled_code)) }}
+  {{ return(adapter.dispatch('create_temporary_view', 'dbt_iceberg')(relation, compiled_code)) }}
 {%- endmacro -%}
 
 {#-- We can't use temporary tables with `create ... as ()` syntax --#}
@@ -183,7 +183,7 @@
 
 
 {% macro persist_constraints(relation, model) %}
-  {{ return(adapter.dispatch('persist_constraints', 'dbt')(relation, model)) }}
+  {{ return(adapter.dispatch('persist_constraints', 'dbt_iceberg')(relation, model)) }}
 {% endmacro %}
 
 {% macro spark__persist_constraints(relation, model) %}
@@ -195,7 +195,7 @@
 {% endmacro %}
 
 {% macro alter_table_add_constraints(relation, constraints) %}
-  {{ return(adapter.dispatch('alter_table_add_constraints', 'dbt')(relation, constraints)) }}
+  {{ return(adapter.dispatch('alter_table_add_constraints', 'dbt_iceberg')(relation, constraints)) }}
 {% endmacro %}
 
 {% macro spark__alter_table_add_constraints(relation, constraints) %}
@@ -210,7 +210,7 @@
 {% endmacro %}
 
 {% macro alter_column_set_constraints(relation, column_dict) %}
-  {{ return(adapter.dispatch('alter_column_set_constraints', 'dbt')(relation, column_dict)) }}
+  {{ return(adapter.dispatch('alter_column_set_constraints', 'dbt_iceberg')(relation, column_dict)) }}
 {% endmacro %}
 
 {% macro spark__alter_column_set_constraints(relation, column_dict) %}
@@ -275,7 +275,7 @@
 {% endmacro %}
 
 {% macro get_columns_in_relation_raw(relation) -%}
-  {{ return(adapter.dispatch('get_columns_in_relation_raw', 'dbt')(relation)) }}
+  {{ return(adapter.dispatch('get_columns_in_relation_raw', 'dbt_iceberg')(relation)) }}
 {%- endmacro -%}
 
 {% macro spark__get_columns_in_relation_raw(relation) -%}
