@@ -25,7 +25,7 @@ def target_http(base_project_cfg):
         {
             "outputs": {
                 "test": {
-                    "type": "spark",
+                    "type": "iceberg",
                     "method": "http",
                     "schema": "analytics",
                     "host": "myorg.sparkhost.com",
@@ -49,7 +49,7 @@ def target_thrift(base_project_cfg):
         {
             "outputs": {
                 "test": {
-                    "type": "spark",
+                    "type": "iceberg",
                     "method": "thrift",
                     "schema": "analytics",
                     "host": "myorg.sparkhost.com",
@@ -69,7 +69,7 @@ def target_thrift_kerberos(base_project_cfg):
         {
             "outputs": {
                 "test": {
-                    "type": "spark",
+                    "type": "iceberg",
                     "method": "thrift",
                     "schema": "analytics",
                     "host": "myorg.sparkhost.com",
@@ -91,7 +91,7 @@ def target_use_ssl_thrift(base_project_cfg):
         {
             "outputs": {
                 "test": {
-                    "type": "spark",
+                    "type": "iceberg",
                     "method": "thrift",
                     "use_ssl": True,
                     "schema": "analytics",
@@ -112,7 +112,7 @@ def target_odbc_cluster(base_project_cfg):
         {
             "outputs": {
                 "test": {
-                    "type": "spark",
+                    "type": "iceberg",
                     "method": "odbc",
                     "schema": "analytics",
                     "host": "myorg.sparkhost.com",
@@ -135,7 +135,7 @@ def target_odbc_sql_endpoint(base_project_cfg):
         {
             "outputs": {
                 "test": {
-                    "type": "spark",
+                    "type": "iceberg",
                     "method": "odbc",
                     "schema": "analytics",
                     "host": "myorg.sparkhost.com",
@@ -157,7 +157,7 @@ def target_odbc_with_extra_conn(base_project_cfg):
         {
             "outputs": {
                 "test": {
-                    "type": "spark",
+                    "type": "iceberg",
                     "method": "odbc",
                     "host": "myorg.sparkhost.com",
                     "schema": "analytics",

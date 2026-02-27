@@ -401,7 +401,7 @@ class TestSparkAdapter(unittest.TestCase):
         profile = {
             "outputs": {
                 "test": {
-                    "type": "spark",
+                    "type": "iceberg",
                     "method": "http",
                     # not allowed
                     "database": "analytics2",
@@ -422,7 +422,7 @@ class TestSparkAdapter(unittest.TestCase):
         profile = {
             "outputs": {
                 "test": {
-                    "type": "spark",
+                    "type": "iceberg",
                     "method": "odbc",
                     "schema": "analytics",
                     "host": "myorg.sparkhost.com",

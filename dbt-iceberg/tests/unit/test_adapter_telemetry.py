@@ -49,4 +49,4 @@ def test_telemetry_with_spark_details():
         "hudi",
     ]
     for file_format in spark_file_formats:
-        assert_telemetry_data("spark", file_format)
+        assert_telemetry_data("iceberg", file_format)

@@ -217,7 +217,7 @@ class SparkCredentials(Credentials):
 
     @property
     def type(self) -> str:
-        return "spark"
+        return "iceberg"
 
     @property
     def unique_field(self) -> str:
@@ -598,7 +598,7 @@ class SparkSqlCliConnectionWrapper(SparkConnectionWrapper):
 
 
 class SparkConnectionManager(SQLConnectionManager):
-    TYPE = "spark"
+    TYPE = "iceberg"
 
     SPARK_CLUSTER_HTTP_PATH = "/sql/protocolv1/o/{organization}/{cluster}"
     SPARK_SQL_ENDPOINT_HTTP_PATH = "/sql/1.0/endpoints/{endpoint}"

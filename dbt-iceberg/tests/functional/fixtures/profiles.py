@@ -34,7 +34,7 @@ def skip_by_profile_type(request):
 
 def apache_spark_target():
     return {
-        "type": "spark",
+        "type": "iceberg",
         "host": "spark_db",
         "user": "dbt",
         "method": "thrift",
@@ -47,7 +47,7 @@ def apache_spark_target():
 
 def databricks_cluster_target():
     return {
-        "type": "spark",
+        "type": "iceberg",
         "method": "odbc",
         "host": os.getenv("DBT_DATABRICKS_HOST_NAME"),
         "cluster": os.getenv("DBT_DATABRICKS_CLUSTER_NAME"),
@@ -63,7 +63,7 @@ def databricks_cluster_target():
 
 def databricks_sql_endpoint_target():
     return {
-        "type": "spark",
+        "type": "iceberg",
         "method": "odbc",
         "host": os.getenv("DBT_DATABRICKS_HOST_NAME"),
         "endpoint": os.getenv("DBT_DATABRICKS_ENDPOINT"),
@@ -78,7 +78,7 @@ def databricks_sql_endpoint_target():
 
 def databricks_http_cluster_target():
     return {
-        "type": "spark",
+        "type": "iceberg",
         "host": os.getenv("DBT_DATABRICKS_HOST_NAME"),
         "cluster": os.getenv("DBT_DATABRICKS_CLUSTER_NAME"),
         "token": os.getenv("DBT_DATABRICKS_TOKEN"),
@@ -93,7 +93,7 @@ def databricks_http_cluster_target():
 
 def spark_session_target():
     return {
-        "type": "spark",
+        "type": "iceberg",
         "host": "localhost",
         "method": "session",
     }
@@ -101,7 +101,7 @@ def spark_session_target():
 
 def spark_http_odbc_target():
     return {
-        "type": "spark",
+        "type": "iceberg",
         "method": "odbc",
         "host": os.getenv("DBT_DATABRICKS_HOST_NAME"),
         "port": 443,
