@@ -7,7 +7,7 @@ fallback-version = "0.0.0"
 root = ".."
 
 [build.targets.wheel]
-packages = ["src/dbt"]
+packages = ["src/dbt/adapters", "src/dbt/include"]
 sources = ["src"]
 
 [envs.default]
