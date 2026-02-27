@@ -1,8 +1,8 @@
-{% macro spark__can_clone_table() %}
+{% macro iceberg__can_clone_table() %}
     {{ return(True) }}
 {% endmacro %}
 
-{% macro spark__create_or_replace_clone(this_relation, defer_relation) %}
+{% macro iceberg__create_or_replace_clone(this_relation, defer_relation) %}
     create or replace table {{ this_relation }} shallow clone {{ defer_relation }}
 {% endmacro %}
 

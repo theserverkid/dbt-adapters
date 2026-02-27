@@ -1,4 +1,4 @@
-{% macro spark__safe_cast(field, type) %}
+{% macro iceberg__safe_cast(field, type) %}
 {%- set field_clean = field.strip('"').strip("'") if (cast_from_string_unsupported_for(type) and field is string) else field -%}
 cast({{field_clean}} as {{type}})
 {% endmacro %}
