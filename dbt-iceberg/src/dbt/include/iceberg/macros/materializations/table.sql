@@ -98,7 +98,7 @@ else:
   msg = f"{type(df)} is not a supported type for dbt Python materialization"
   raise Exception(msg)
 
-df.write.mode("overwrite").format("{{ config.get('file_format', 'delta') }}").option("overwriteSchema", "true").saveAsTable("{{ target_relation }}")
+df.write.mode("overwrite").format("{{ config.get('file_format', 'iceberg') }}").option("overwriteSchema", "true").saveAsTable("{{ target_relation.include(database=True) }}")
 {%- endmacro -%}
 
 {%macro py_script_comment()%}
