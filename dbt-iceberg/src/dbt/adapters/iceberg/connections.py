@@ -123,6 +123,9 @@ class SparkCredentials(Credentials):
 
     # spark-sql thrift server settings (when host is set, connects via thrift instead of CLI)
     spark_history_server: Optional[str] = None  # URL of the Spark History Server UI (informational)
+    spark_kubernetes_master: Optional[str] = None  # URL of the Kubernetes API server for spark-submit.
+    # When set, spark-submit is called with --master <value> --deploy-mode client.
+    # Example: "k8s://https://kubernetes.docker.internal:6443"
 
     @classmethod
     def __pre_deserialize__(cls, data: Any) -> Any:

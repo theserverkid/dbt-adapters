@@ -329,6 +329,12 @@ class SparkSubmitPythonJobHelper(PythonJobHelper):
             return os.path.join(home, "bin", "spark-submit")
         return "spark-submit"
 
+    def _master_args(self) -> list:
+        master = getattr(self.credentials, "spark_kubernetes_master", None)
+        if master:
+            return ["--master", master, "--deploy-mode", "client"]
+        return []
+
     def _extra_args(self) -> list:
         return list(getattr(self.credentials, "spark_submit_args", []))
 
@@ -350,7 +356,7 @@ class SparkSubmitPythonJobHelper(PythonJobHelper):
             tmp_path = tmp.name
 
         try:
-            cmd = [self._spark_submit_bin()] + self._extra_args() + [tmp_path]
+            cmd = [self._spark_submit_bin()] + self._master_args() + self._extra_args() + [tmp_path]
             from dbt.adapters.events.logging import AdapterLogger
 
             _logger = AdapterLogger("Spark")
