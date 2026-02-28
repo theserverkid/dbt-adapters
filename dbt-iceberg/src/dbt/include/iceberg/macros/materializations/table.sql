@@ -98,7 +98,10 @@ else:
   msg = f"{type(df)} is not a supported type for dbt Python materialization"
   raise Exception(msg)
 
-df.write.mode("overwrite").format("{{ config.get('file_format', 'iceberg') }}").option("overwriteSchema", "true").saveAsTable("{{ target_relation.include(database=True) }}")
+_catalog = spark.conf.get("spark.sql.defaultCatalog", None)
+_table = "{{ target_relation.schema }}.{{ target_relation.identifier }}"
+_full_table = f"{_catalog}.{_table}" if _catalog else _table
+df.write.mode("overwrite").format("{{ config.get('file_format', 'iceberg') }}").option("overwriteSchema", "true").saveAsTable(_full_table)
 {%- endmacro -%}
 
 {%macro py_script_comment()%}
