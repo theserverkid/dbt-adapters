@@ -301,16 +301,29 @@ class AllPurposeClusterPythonJobHelper(BaseDatabricksHelper):
 class SparkSubmitPythonJobHelper(PythonJobHelper):
     """Submit a Python model via the spark-submit CLI.
 
-    The compiled Python code is written to a temporary file and submitted
-    via ``spark-submit <extra_args> <tmpfile.py>``.  stdout/stderr from the
-    process are streamed to the dbt logger so users see Spark output in real
-    time.
+    Two submission paths are supported:
+
+    Local path (default):
+        The compiled code is written to a local tmp file and its path is
+        passed directly to spark-submit.  Works for local/client-mode Spark.
+
+    K8s cluster mode (runner pattern):
+        When ``spark_kubernetes_runner`` and ``spark_script_staging_uri`` are
+        both set in the profile, the compiled code is uploaded to object
+        storage (S3/MinIO) and spark-submit is invoked with a fixed runner
+        script baked into the Spark image (``local:///opt/dbt/runner.py``).
+        The runner downloads the script from S3 and exec()s it inside the
+        driver pod.  This avoids the local-path limitation of cluster mode.
 
     Profile fields used (all optional unless noted):
-      spark_home         – path to ``$SPARK_HOME``; falls back to the env var.
-      spark_submit_args  – list of extra CLI flags for spark-submit, e.g.
-                           ["--master", "local[4]", "--conf", "k=v"].
-      spark_submit_timeout – max seconds to wait for the job (None = forever).
+      spark_home               – path to ``$SPARK_HOME``; falls back to env var.
+      spark_submit_args        – list of extra CLI flags for spark-submit.
+      spark_submit_timeout     – max seconds to wait (None = wait forever).
+      spark_kubernetes_master  – k8s API URL; adds --master/--deploy-mode cluster.
+      spark_kubernetes_runner  – local:// URI of runner baked in image.
+      spark_script_staging_uri – S3 prefix for staged scripts, e.g. s3a://bucket/prefix.
+      spark_s3_host_endpoint   – host-accessible S3 URL override (defaults to replacing
+                                 in-cluster hostname with localhost).
     """
 
     def __init__(self, parsed_model: Dict, credentials: "SparkCredentials") -> None:  # type: ignore[name-defined]
@@ -341,11 +354,87 @@ class SparkSubmitPythonJobHelper(PythonJobHelper):
     def _timeout(self) -> Any:
         return getattr(self.credentials, "spark_submit_timeout", None)
 
+    def _s3a_conf(self, key: str) -> Any:
+        """Extract a --conf value from spark_submit_args by key prefix."""
+        extra = self._extra_args()
+        for i, a in enumerate(extra):
+            if a == "--conf" and i + 1 < len(extra) and extra[i + 1].startswith(key + "="):
+                return extra[i + 1].split("=", 1)[1]
+        return None
+
+    def _upload_script(self, compiled_code: str, staging_uri: str) -> tuple:
+        """Upload compiled_code to object storage. Returns (s3_client, bucket, key)."""
+        try:
+            import boto3
+            from botocore.client import Config
+        except ImportError:
+            raise DbtRuntimeError(
+                "boto3 is required for K8s cluster mode Python models. "
+                "Install it with: pip install dbt-iceberg[kubernetes]"
+            )
+
+        endpoint = self._s3a_conf("spark.hadoop.fs.s3a.endpoint")
+        access_key = self._s3a_conf("spark.hadoop.fs.s3a.access.key")
+        secret_key = self._s3a_conf("spark.hadoop.fs.s3a.secret.key")
+
+        # The s3a endpoint uses in-cluster DNS (e.g. http://minio:9000).
+        # The submitter runs outside the cluster so we need a host-accessible URL.
+        # Accept an explicit override via spark_s3_host_endpoint credential, otherwise
+        # derive it by replacing the in-cluster hostname with localhost.
+        host_endpoint = getattr(self.credentials, "spark_s3_host_endpoint", None) or (
+            endpoint.replace("minio", "localhost") if endpoint else None
+        )
+
+        # Parse staging URI: s3a://bucket[/prefix]
+        path = staging_uri.removeprefix("s3a://")
+        bucket, _, prefix = path.partition("/")
+        key = f"{prefix}/{self.schema}_{self.identifier}_{uuid.uuid4().hex}.py".lstrip("/")
+
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=host_endpoint,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            config=Config(signature_version="s3v4"),
+        )
+        s3.put_object(Bucket=bucket, Key=key, Body=compiled_code.encode())
+        return s3, bucket, key
+
     # ------------------------------------------------------------------
     # PythonJobHelper interface
     # ------------------------------------------------------------------
 
     def submit(self, compiled_code: str) -> None:
+        runner = getattr(self.credentials, "spark_kubernetes_runner", None)
+        staging_uri = getattr(self.credentials, "spark_script_staging_uri", None)
+
+        if runner and staging_uri:
+            self._submit_via_runner(compiled_code, runner, staging_uri)
+        else:
+            self._submit_local(compiled_code)
+
+    def _submit_via_runner(self, compiled_code: str, runner: str, staging_uri: str) -> None:
+        """K8s cluster mode: upload script to object storage, submit runner."""
+        s3, bucket, key = self._upload_script(compiled_code, staging_uri)
+        script_s3_uri = f"s3a://{bucket}/{key}"
+
+        try:
+            cmd = (
+                [self._spark_submit_bin()]
+                + self._master_args()
+                + self._extra_args()
+                + ["--conf", f"spark.dbt.script.uri={script_s3_uri}"]
+                + [runner]
+            )
+            self._run_spark_submit(cmd)
+        finally:
+            try:
+                s3.delete_object(Bucket=bucket, Key=key)
+            except Exception:
+                pass
+
+    def _submit_local(self, compiled_code: str) -> None:
+        """Original path: write to local tmp file, pass path directly."""
         with tempfile.NamedTemporaryFile(
             mode="w",
             suffix=".py",
@@ -357,50 +446,54 @@ class SparkSubmitPythonJobHelper(PythonJobHelper):
 
         try:
             cmd = [self._spark_submit_bin()] + self._master_args() + self._extra_args() + [tmp_path]
-            from dbt.adapters.events.logging import AdapterLogger
-
-            _logger = AdapterLogger("Spark")
-            _logger.debug("spark-submit command: {}".format(cmd))
-
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                )
-            except FileNotFoundError as e:
-                raise DbtRuntimeError(
-                    "Could not find spark-submit binary. "
-                    "Set spark_home in your profile or ensure spark-submit is on PATH.\n"
-                    f"Original error: {e}"
-                ) from e
-
-            output_lines = []
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                line = line.rstrip("\n")
-                _logger.debug(line)
-                output_lines.append(line)
-
-            timeout = self._timeout()
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                raise DbtRuntimeError(
-                    f"spark-submit job timed out after {timeout} seconds for model "
-                    f"{self.schema}.{self.identifier}"
-                )
-
-            if proc.returncode != 0:
-                raise DbtRuntimeError(
-                    f"spark-submit exited with code {proc.returncode} for model "
-                    f"{self.schema}.{self.identifier}.\n"
-                    + "\n".join(output_lines[-50:])  # last 50 lines for context
-                )
+            self._run_spark_submit(cmd)
         finally:
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
+
+    def _run_spark_submit(self, cmd: list) -> None:
+        """Shared subprocess execution logic."""
+        from dbt.adapters.events.logging import AdapterLogger
+
+        _logger = AdapterLogger("Spark")
+        _logger.debug("spark-submit command: {}".format(cmd))
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        except FileNotFoundError as e:
+            raise DbtRuntimeError(
+                "Could not find spark-submit binary. "
+                "Set spark_home in your profile or ensure spark-submit is on PATH.\n"
+                f"Original error: {e}"
+            ) from e
+
+        output_lines = []
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            _logger.debug(line)
+            output_lines.append(line)
+
+        timeout = self._timeout()
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            raise DbtRuntimeError(
+                f"spark-submit job timed out after {timeout} seconds for model "
+                f"{self.schema}.{self.identifier}"
+            )
+
+        if proc.returncode != 0:
+            raise DbtRuntimeError(
+                f"spark-submit exited with code {proc.returncode} for model "
+                f"{self.schema}.{self.identifier}.\n"
+                + "\n".join(output_lines[-50:])  # last 50 lines for context
+            )

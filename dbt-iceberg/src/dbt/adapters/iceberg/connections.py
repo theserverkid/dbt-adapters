@@ -127,6 +127,14 @@ class SparkCredentials(Credentials):
     # When set, spark-submit is called with --master <value> --deploy-mode client.
     # Example: "k8s://https://kubernetes.docker.internal:6443"
 
+    # K8s cluster mode runner pattern (Option C)
+    # When both fields are set, compiled Python models are uploaded to object storage and
+    # submitted via a fixed runner script baked into the Spark image, instead of passing
+    # a local tmp file path (which is inaccessible to driver pods in cluster mode).
+    spark_kubernetes_runner: Optional[str] = None  # local:// URI of runner in image, e.g. local:///opt/dbt/runner.py
+    spark_script_staging_uri: Optional[str] = None  # S3 prefix for staged scripts, e.g. s3a://turk/dbt-scripts
+    spark_s3_host_endpoint: Optional[str] = None  # host-accessible S3 URL override, e.g. http://localhost:9000
+
     @classmethod
     def __pre_deserialize__(cls, data: Any) -> Any:
         data = super().__pre_deserialize__(data)
