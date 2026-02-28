@@ -17,7 +17,7 @@ from typing import (
     TYPE_CHECKING,
 )
 
-from dbt.adapters.base.relation import InformationSchema
+from dbt.adapters.base.relation import InformationSchema, AdapterTrackingRelationInfo
 from dbt.adapters.contracts.connection import AdapterResponse
 from dbt.adapters.events.logging import AdapterLogger
 from dbt_common.exceptions import DbtRuntimeError, CompilationError
@@ -527,6 +527,17 @@ class SparkAdapter(SQLAdapter):
     def debug_query(self) -> None:
         """Override for DebugTask method"""
         self.execute("select 1 as id")
+
+    @classmethod
+    def get_adapter_run_info(cls, config: RelationConfig) -> AdapterTrackingRelationInfo:
+        from importlib import import_module
+
+        return AdapterTrackingRelationInfo(
+            adapter_name="iceberg",
+            base_adapter_version=import_module("dbt.adapters.__about__").version,
+            adapter_version=import_module("dbt.adapters.iceberg.__version__").version,
+            model_adapter_details=cls._get_adapter_specific_run_info(config),
+        )
 
     @classmethod
     def _get_adapter_specific_run_info(cls, config: RelationConfig) -> Dict[str, Any]:
