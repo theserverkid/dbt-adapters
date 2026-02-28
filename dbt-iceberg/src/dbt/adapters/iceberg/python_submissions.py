@@ -332,7 +332,7 @@ class SparkSubmitPythonJobHelper(PythonJobHelper):
     def _master_args(self) -> list:
         master = getattr(self.credentials, "spark_kubernetes_master", None)
         if master:
-            return ["--master", master, "--deploy-mode", "client"]
+            return ["--master", master, "--deploy-mode", "cluster"]
         return []
 
     def _extra_args(self) -> list:
