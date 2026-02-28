@@ -20,6 +20,7 @@ class TestSparkAdapter(unittest.TestCase):
         target_odbc_with_extra_conn,
         target_thrift,
         target_thrift_kerberos,
+        target_thrift_with_catalog,
         target_odbc_sql_endpoint,
         target_odbc_cluster,
         target_use_ssl_thrift,
@@ -32,6 +33,7 @@ class TestSparkAdapter(unittest.TestCase):
         self.target_odbc_cluster = target_odbc_cluster
         self.target_thrift = target_thrift
         self.target_thrift_kerberos = target_thrift_kerberos
+        self.target_thrift_with_catalog = target_thrift_with_catalog
         self.target_use_ssl_thrift = target_use_ssl_thrift
 
     def test_http_connection(self):
@@ -123,6 +125,21 @@ class TestSparkAdapter(unittest.TestCase):
             self.assertIsNotNone(connection.handle)
             self.assertEqual(connection.credentials.schema, "analytics")
             self.assertIsNone(connection.credentials.database)
+
+    def test_thrift_connection_passes_default_catalog_to_configuration(self):
+        config = self.target_thrift_with_catalog
+        adapter = SparkAdapter(config, get_context("spawn"))
+
+        def hive_thrift_connect(
+            host, port, username, auth, kerberos_service_name, password, configuration
+        ):
+            self.assertEqual(configuration["spark.sql.defaultCatalog"], "turk_catalog")
+            self.assertEqual(configuration["spark.sql.ansi.enabled"], "false")
+
+        with mock.patch.object(hive, "connect", new=hive_thrift_connect):
+            connection = adapter.acquire_connection("dummy")
+            connection.handle  # trigger lazy-load
+            self.assertEqual(connection.state, "open")
 
     def test_odbc_cluster_connection(self):
         adapter = SparkAdapter(self.target_odbc_cluster, get_context("spawn"))

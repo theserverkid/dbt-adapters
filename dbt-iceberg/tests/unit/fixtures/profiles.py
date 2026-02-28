@@ -151,6 +151,29 @@ def target_odbc_sql_endpoint(base_project_cfg):
 
 
 @pytest.fixture(scope="session", autouse=True)
+def target_thrift_with_catalog(base_project_cfg):
+    return config_from_parts_or_dicts(
+        base_project_cfg,
+        {
+            "outputs": {
+                "test": {
+                    "type": "iceberg",
+                    "method": "thrift",
+                    "schema": "analytics",
+                    "host": "myorg.sparkhost.com",
+                    "port": 10001,
+                    "user": "dbt",
+                    "server_side_parameters": {
+                        "spark.sql.defaultCatalog": "turk_catalog",
+                    },
+                }
+            },
+            "target": "test",
+        },
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
 def target_odbc_with_extra_conn(base_project_cfg):
     return config_from_parts_or_dicts(
         base_project_cfg,

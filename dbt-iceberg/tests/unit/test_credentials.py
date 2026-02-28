@@ -31,3 +31,14 @@ def test_credentials_server_side_parameters_ansi_disabled_default() -> None:
         schema="tests",
     )
     assert credentials.server_side_parameters["spark.sql.ansi.enabled"] == "false"
+
+
+def test_credentials_server_side_parameters_default_catalog_preserved() -> None:
+    credentials = SparkCredentials(
+        host="localhost",
+        method=SparkConnectionMethod.THRIFT,  # type:ignore
+        database="tests",
+        schema="tests",
+        server_side_parameters={"spark.sql.defaultCatalog": "turk_catalog"},
+    )
+    assert credentials.server_side_parameters["spark.sql.defaultCatalog"] == "turk_catalog"
