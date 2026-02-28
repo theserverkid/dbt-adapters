@@ -77,6 +77,24 @@ prompts:
         type: "int"
         hint: "maximum seconds to wait for spark-submit to complete (optional)"
         required: false
+    spark_auto:
+      _fixed_method: spark_auto
+      host:
+        hint: "127.0.0.1"
+        required: false
+      spark_home:
+        hint: "/opt/spark"
+        required: false
+      spark_sql_args:
+        hint: '["--master", "local[*]"]'
+        required: false
+      spark_submit_args:
+        hint: '["--conf", "spark.sql.extensions=..."]'
+        required: false
+      spark_submit_timeout:
+        type: "int"
+        hint: "maximum seconds to wait for spark-submit to complete (optional)"
+        required: false
   port:
     default: 443
     type: "int"

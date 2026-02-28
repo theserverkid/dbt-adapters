@@ -84,6 +84,7 @@ class SparkConnectionMethod(StrEnum):
     SESSION = "session"
     SPARK_SUBMIT = "spark_submit"
     SPARK_SQL = "spark_sql"
+    SPARK_AUTO = "spark_auto"
 
 
 @dataclass
@@ -137,10 +138,11 @@ class SparkCredentials(Credentials):
     def __post_init__(self) -> None:
         if self.method is None:
             raise DbtRuntimeError("Must specify `method` in profile")
-        # spark-submit and spark-sql use the local CLI; host is not required
+        # spark-submit, spark-sql, and spark_auto use the local CLI; host is not required
         if self.method not in (
             SparkConnectionMethod.SPARK_SUBMIT,
             SparkConnectionMethod.SPARK_SQL,
+            SparkConnectionMethod.SPARK_AUTO,
         ) and self.host is None:
             raise DbtRuntimeError("Must specify `host` in profile")
         if self.schema is None:
@@ -179,7 +181,11 @@ class SparkCredentials(Credentials):
             or self.method == SparkConnectionMethod.THRIFT
             or (
                 self.method
-                in (SparkConnectionMethod.SPARK_SQL, SparkConnectionMethod.SPARK_SUBMIT)
+                in (
+                    SparkConnectionMethod.SPARK_SQL,
+                    SparkConnectionMethod.SPARK_SUBMIT,
+                    SparkConnectionMethod.SPARK_AUTO,
+                )
                 and self.host is not None
             )
         ) and not (ThriftState and THttpClient and hive):
@@ -833,6 +839,33 @@ class SparkConnectionManager(SQLConnectionManager):
                     # can still introspect the metastore.
                     if creds.host is not None:
                         handle = cls._open_thrift(creds)
+                    else:
+                        handle = SparkSqlCliConnectionWrapper(
+                            spark_home=creds.spark_home,
+                            extra_args=creds.spark_sql_args,
+                            schema=creds.schema,
+                        )
+                elif creds.method == SparkConnectionMethod.SPARK_AUTO:
+                    # Try Thrift first; fall back to spark-sql CLI if unreachable.
+                    # Python models always use spark-submit regardless of this connection.
+                    if creds.host is not None:
+                        try:
+                            handle = cls._open_thrift(creds)
+                            logger.debug(
+                                "spark_auto: connected via Thrift to {}:{}".format(
+                                    creds.host, creds.port
+                                )
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "spark_auto: Thrift connection to {}:{} failed ({}), "
+                                "falling back to spark-sql CLI".format(creds.host, creds.port, e)
+                            )
+                            handle = SparkSqlCliConnectionWrapper(
+                                spark_home=creds.spark_home,
+                                extra_args=creds.spark_sql_args,
+                                schema=creds.schema,
+                            )
                     else:
                         handle = SparkSqlCliConnectionWrapper(
                             spark_home=creds.spark_home,

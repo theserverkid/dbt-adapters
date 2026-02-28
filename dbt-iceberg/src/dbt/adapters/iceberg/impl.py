@@ -495,6 +495,7 @@ class SparkAdapter(SQLAdapter):
         if getattr(creds, "method", None) in (
             SparkConnectionMethod.SPARK_SUBMIT,
             SparkConnectionMethod.SPARK_SQL,
+            SparkConnectionMethod.SPARK_AUTO,
         ):
             return "spark_submit"
         return "all_purpose_cluster"

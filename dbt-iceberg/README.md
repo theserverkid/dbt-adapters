@@ -242,20 +242,54 @@ my_spark_project:
       spark_submit_timeout: 3600
 ```
 
+### spark-auto — automatic routing (recommended for mixed environments)
+
+Use `spark_auto` when you want a single profile that works whether or not a Spark Thrift Server is running. At connection time the adapter tries to reach the Thrift server; if it is unavailable it transparently falls back to the `spark-sql` CLI. Python models always use `spark-submit` regardless of which SQL path is active.
+
+```yaml
+my_spark_project:
+  target: dev
+  outputs:
+    dev:
+      type: iceberg
+      method: spark_auto
+      host: 127.0.0.1       # Thrift server — tried first; CLI used if unreachable
+      port: 10000
+      user: dbt
+      schema: analytics
+      connect_retries: 5
+      connect_timeout: 60
+      retry_all: true
+      spark_history_server: http://127.0.0.1:18080
+      # Spark config applied when connecting via Thrift
+      server_side_parameters:
+        spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+        spark.sql.defaultCatalog: my_catalog
+      # Extra flags passed to spark-sql CLI (fallback path)
+      spark_sql_args:
+        - "--conf"
+        - "spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+      # Extra flags for spark-submit (Python models)
+      spark_submit_args:
+        - "--conf"
+        - "spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+      spark_submit_timeout: 3600
+```
+
 ### Profile fields
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| `method` | Yes | — | `spark_sql` or `spark_submit` |
+| `method` | Yes | — | `spark_sql`, `spark_submit`, or `spark_auto` |
 | `schema` | Yes | — | The default schema (database) to use |
-| `host` | No | — | Thrift server hostname. When set, `spark_sql` and `spark_submit` connect via Thrift instead of CLI |
+| `host` | No | — | Thrift server hostname. When set, `spark_sql`, `spark_submit`, and `spark_auto` connect via Thrift instead of CLI. `spark_auto` falls back to CLI if the server is unreachable. |
 | `port` | No | `443` | Thrift server port (typically `10000`) |
 | `user` | No | — | Username for thrift server authentication |
 | `auth` | No | — | Auth mechanism for thrift (e.g. `NONE`, `LDAP`, `KERBEROS`) |
 | `use_ssl` | No | `false` | Use SSL/TLS for the thrift connection |
 | `spark_history_server` | No | — | URL of the Spark History Server UI (informational) |
 | `spark_home` | No | `$SPARK_HOME` env var | Path to your Spark installation (CLI mode) |
-| `spark_sql_args` | No | `[]` | Extra CLI flags for `spark-sql` (CLI mode only) |
+| `spark_sql_args` | No | `[]` | Extra CLI flags for `spark-sql` (CLI/fallback mode only) |
 | `spark_submit_args` | No | `[]` | Extra CLI flags for `spark-submit` (Python models only) |
 | `spark_submit_timeout` | No | `null` (no timeout) | Max seconds to wait for a `spark-submit` job |
 | `poll_interval` | No | `5` | Seconds between status polls for thrift queries |
@@ -265,9 +299,10 @@ my_spark_project:
 
 ### Notes
 
-- Thrift server mode (`host` set) requires `pip install dbt-spark[PyHive]` for both `spark_sql` and `spark_submit`.
-- `spark_submit` only invokes `spark-submit` for Python models. SQL statements use thrift when `host` is set, otherwise `spark-sql` CLI.
-- `spark_sql_args` is only used in CLI mode; it is ignored when `host` is set.
+- Thrift server mode (`host` set) requires `pip install dbt-spark[PyHive]` for `spark_sql`, `spark_submit`, and `spark_auto`.
+- `spark_submit` and `spark_auto` only invoke `spark-submit` for Python models. SQL statements use thrift when `host` is set (or reachable for `spark_auto`), otherwise `spark-sql` CLI.
+- `spark_sql_args` is only used in CLI mode; it is ignored when connected via Thrift.
+- `spark_auto` evaluates thrift availability at connection time — if the server comes up mid-run, subsequent connections will use Thrift.
 - If `spark_home` is not set in the profile, dbt falls back to the `SPARK_HOME` environment variable, then to `spark-sql`/`spark-submit` on `PATH`.
 - The Spark History Server requires event logging on the thrift server (`spark.eventLog.enabled=true`). The bundled docker-compose configures this automatically.
 
