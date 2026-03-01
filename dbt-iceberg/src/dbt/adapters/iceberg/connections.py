@@ -159,15 +159,6 @@ class SparkCredentials(Credentials):
         if self.schema is None:
             raise DbtRuntimeError("Must specify `schema` in profile")
 
-        # spark classifies database and schema as the same thing
-        if self.database is not None and self.database != self.schema:
-            raise DbtRuntimeError(
-                f"    schema: {self.schema} \n"
-                f"    database: {self.database} \n"
-                f"On Spark, database must be omitted or have the same value as"
-                f" schema."
-            )
-        self.database = None
 
         if self.method == SparkConnectionMethod.ODBC:
             try:
@@ -241,7 +232,7 @@ class SparkCredentials(Credentials):
         return self.host or self.schema  # type: ignore
 
     def _connection_keys(self) -> Tuple[str, ...]:
-        return "host", "port", "cluster", "endpoint", "schema", "organization"
+        return "host", "port", "cluster", "endpoint", "schema", "database", "organization"
 
 
 class SparkConnectionWrapper(ABC):

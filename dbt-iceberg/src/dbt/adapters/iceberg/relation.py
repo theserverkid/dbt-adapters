@@ -20,7 +20,7 @@ class SparkQuotePolicy(Policy):
 
 @dataclass
 class SparkIncludePolicy(Policy):
-    database: bool = False
+    database: bool = True
     schema: bool = True
     identifier: bool = True
 
@@ -37,14 +37,5 @@ class SparkRelation(BaseRelation):
     information: Optional[str] = None
     require_alias: bool = False
 
-    def __post_init__(self) -> None:
-        if self.database != self.schema and self.database:
-            raise DbtRuntimeError("Cannot set database in spark!")
-
     def render(self) -> str:
-        if self.include_policy.database and self.include_policy.schema:
-            raise DbtRuntimeError(
-                "Got a spark relation with schema and database set to "
-                "include, but only one can be set"
-            )
         return super().render()

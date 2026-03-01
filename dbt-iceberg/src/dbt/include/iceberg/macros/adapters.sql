@@ -350,7 +350,12 @@
 
 
 {% macro iceberg__generate_database_name(custom_database_name=none, node=none) -%}
-  {% do return(None) %}
+  {%- set default_database = target.database -%}
+  {%- if custom_database_name is none -%}
+    {{ default_database }}
+  {%- else -%}
+    {{ custom_database_name }}
+  {%- endif -%}
 {%- endmacro %}
 
 {% macro iceberg__persist_docs(relation, model, for_relation, for_columns) -%}
