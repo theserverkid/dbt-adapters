@@ -111,6 +111,8 @@ class SparkCredentials(Credentials):
     poll_interval: int = 5  # Polling interval in seconds for async queries
     query_retries: int = 1  # Number of times to retry on connection loss during query execution
 
+    spark_history_server: Optional[str] = None
+
     # Iceberg REST catalog (required for Python models running in Kubernetes containers)
     iceberg_rest_uri: Optional[str] = None    # e.g. http://iceberg-rest:8181
     iceberg_warehouse: Optional[str] = None   # e.g. s3://warehouse/
