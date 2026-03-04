@@ -462,12 +462,22 @@ class KubernetesPythonJobHelper(PythonJobHelper):
         if creds.iceberg_token:
             env_vars.append(client.V1EnvVar(name="ICEBERG_TOKEN", value=creds.iceberg_token))
 
+        env_secret = getattr(creds, "kubernetes_env_secret", None)
+        env_from = (
+            [client.V1EnvFromSource(
+                secret_ref=client.V1SecretEnvSource(name=env_secret)
+            )]
+            if env_secret
+            else None
+        )
+
         resource_requirements = self._get_resource_requirements()
         container = client.V1Container(
             name="dbt-model-runner",
             image=image,
             image_pull_policy=getattr(creds, "kubernetes_job_image_pull_policy", "IfNotPresent"),
             env=env_vars,
+            env_from=env_from,
             volume_mounts=[
                 client.V1VolumeMount(
                     name="model-code",

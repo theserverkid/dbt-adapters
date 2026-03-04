@@ -130,6 +130,10 @@ class SparkCredentials(Credentials):
     # File source base folder (mounted path inside pods, or S3 prefix)
     data_folder: Optional[str] = None
 
+    # Optional Kubernetes Secret name whose keys are injected as env vars into Job pods.
+    # Useful for providing S3/MinIO credentials (e.g. S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY).
+    kubernetes_env_secret: Optional[str] = None
+
     @classmethod
     def __pre_deserialize__(cls, data: Any) -> Any:
         data = super().__pre_deserialize__(data)

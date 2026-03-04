@@ -64,9 +64,24 @@ def _make_dbt_context():
     _token = _os.environ.get("ICEBERG_TOKEN")
     if _token:
         _props["token"] = _token
+    # Pass MinIO/S3 credentials to PyIceberg so it can write Parquet files
+    _s3_endpoint = _os.environ.get("S3_ENDPOINT")
+    _s3_key = _os.environ.get("S3_ACCESS_KEY")
+    _s3_secret = _os.environ.get("S3_SECRET_KEY")
+    if _s3_endpoint:
+        _props["s3.endpoint"] = _s3_endpoint
+    if _s3_key:
+        _props["s3.access-key-id"] = _s3_key
+    if _s3_secret:
+        _props["s3.secret-access-key"] = _s3_secret
+    if _s3_endpoint:
+        _props["s3.path-style-access"] = "true"
     _catalog = _RestCatalog("dbt_catalog", **_props)
 
     class _DbtContext:
+        def config(self, *args, **kwargs):
+            pass  # config is handled by dbt at compile time
+
         def ref(self, model_name):
             _schema = _os.environ["DBT_SCHEMA"]
             _tbl = _catalog.load_table(f"{_schema}.{model_name}")
@@ -93,12 +108,21 @@ if not isinstance(_result_df, _pl.DataFrame):
 _target_table = f"{_os.environ['DBT_SCHEMA']}.{_os.environ['DBT_IDENTIFIER']}"
 _arrow_table = _result_df.to_arrow()
 
+from pyiceberg.exceptions import NoSuchTableError as _NoSuchTableError
 try:
     _iceberg_table = _iceberg_catalog.load_table(_target_table)
+except _NoSuchTableError:
+    _iceberg_table = _iceberg_catalog.create_table(_target_table, schema=_arrow_table.schema)
+else:
+    # Table exists — try overwrite; if it fails (e.g. stale S3 metadata), drop and recreate
+    try:
+        _iceberg_table.overwrite(_arrow_table)
+        _iceberg_table = None  # signal that we already wrote
+    except Exception:
+        _iceberg_catalog.drop_table(_target_table)
+        _iceberg_table = _iceberg_catalog.create_table(_target_table, schema=_arrow_table.schema)
+if _iceberg_table is not None:
     _iceberg_table.overwrite(_arrow_table)
-except Exception:
-    import pyarrow as _pa
-    _iceberg_catalog.create_table(_target_table, schema=_arrow_table.schema).overwrite(_arrow_table)
 
 print(f"Written {len(_result_df)} rows to {_target_table}")
 {%- endmacro -%}
