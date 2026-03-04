@@ -1,10 +1,9 @@
 import base64
 import os
-import subprocess
-import tempfile
+import re
 import time
 import requests
-from typing import Any, Dict, Callable, Iterable
+from typing import Any, Dict, Callable, Iterable, Optional
 import uuid
 
 from dbt.adapters.base import PythonJobHelper
@@ -298,32 +297,52 @@ class AllPurposeClusterPythonJobHelper(BaseDatabricksHelper):
                 context.destroy(context_id)
 
 
-class SparkSubmitPythonJobHelper(PythonJobHelper):
-    """Submit a Python model via the spark-submit CLI.
+# File extension → Docker image suffix mapping
+# Client projects must build and push images named:
+#   {image_registry}/dbt-iceberg-{suffix}:latest
+# See documentation for the required image interface.
+EXTENSION_IMAGE_MAP: Dict[str, str] = {
+    ".xlsx": "excel",
+    ".xlsb": "excel",
+    ".xls":  "excel",
+    ".pdf":  "pdf",
+    ".csv":  "csv",
+    ".tsv":  "csv",
+    ".jpeg": "image",
+    ".jpg":  "image",
+    ".png":  "image",
+}
+DEFAULT_IMAGE_SUFFIX = "base"
 
-    Two submission paths are supported:
 
-    Local path (default):
-        The compiled code is written to a local tmp file and its path is
-        passed directly to spark-submit.  Works for local/client-mode Spark.
+class KubernetesPythonJobHelper(PythonJobHelper):
+    """Submit a Python model as a Kubernetes Job running a Docker container.
 
-    K8s cluster mode (runner pattern):
-        When ``spark_kubernetes_runner`` and ``spark_script_staging_uri`` are
-        both set in the profile, the compiled code is uploaded to object
-        storage (S3/MinIO) and spark-submit is invoked with a fixed runner
-        script baked into the Spark image (``local:///opt/dbt/runner.py``).
-        The runner downloads the script from S3 and exec()s it inside the
-        driver pod.  This avoids the local-path limitation of cluster mode.
+    The container uses Polars + PyIceberg to process data and write output
+    to an Iceberg REST catalog. Image selection is automatic based on the
+    file extension configured in the model config (file_extension field).
 
-    Profile fields used (all optional unless noted):
-      spark_home               – path to ``$SPARK_HOME``; falls back to env var.
-      spark_submit_args        – list of extra CLI flags for spark-submit.
-      spark_submit_timeout     – max seconds to wait (None = wait forever).
-      spark_kubernetes_master  – k8s API URL; adds --master/--deploy-mode cluster.
-      spark_kubernetes_runner  – local:// URI of runner baked in image.
-      spark_script_staging_uri – S3 prefix for staged scripts, e.g. s3a://bucket/prefix.
-      spark_s3_host_endpoint   – host-accessible S3 URL override (defaults to replacing
-                                 in-cluster hostname with localhost).
+    The compiled model code (including the dbt materialization wrapper) is
+    passed via a Kubernetes ConfigMap mounted at /opt/dbt/model.py.
+
+    Profile fields used:
+      iceberg_rest_uri            – Iceberg REST catalog URI (required).
+      iceberg_warehouse           – Iceberg warehouse path (required).
+      iceberg_token               – Optional Bearer token for REST catalog.
+      kubernetes_namespace        – Namespace for Job pods (default: "default").
+      kubernetes_service_account  – ServiceAccount name (default: "default").
+      kubernetes_job_timeout      – Max seconds to wait (default: 3600).
+      kubernetes_job_image_pull_policy – Image pull policy (default: "IfNotPresent").
+      image_registry              – Docker image registry prefix (required).
+      data_folder                 – Base data folder path passed into the container.
+
+    Model config fields:
+      file_extension    – File extension to auto-select image (e.g. ".xlsx").
+      data_folder       – Subfolder under profile's data_folder for this model.
+      kubernetes_image  – Explicit image override (skips auto-selection).
+      kubernetes_resource_limits   – Dict of K8s resource limits.
+      kubernetes_resource_requests – Dict of K8s resource requests.
+      timeout           – Job timeout in seconds (overrides profile default).
     """
 
     def __init__(self, parsed_model: Dict, credentials: "SparkCredentials") -> None:  # type: ignore[name-defined]
@@ -331,169 +350,279 @@ class SparkSubmitPythonJobHelper(PythonJobHelper):
         self.credentials = credentials
         self.identifier = parsed_model["alias"]
         self.schema = parsed_model["schema"]
+        self.timeout = self._get_timeout()
+        self._k8s_batch: Any = None
+        self._k8s_core: Any = None
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
+    def _get_timeout(self) -> int:
+        model_timeout = self.parsed_model["config"].get("timeout", None)
+        if model_timeout is not None:
+            return int(model_timeout)
+        return getattr(self.credentials, "kubernetes_job_timeout", 3600)
 
-    def _spark_submit_bin(self) -> str:
-        home = getattr(self.credentials, "spark_home", None) or os.environ.get("SPARK_HOME", "")
-        if home:
-            return os.path.join(home, "bin", "spark-submit")
-        return "spark-submit"
-
-    def _master_args(self) -> list:
-        master = getattr(self.credentials, "spark_kubernetes_master", None)
-        if master:
-            return ["--master", master, "--deploy-mode", "cluster"]
-        return []
-
-    def _extra_args(self) -> list:
-        return list(getattr(self.credentials, "spark_submit_args", []))
-
-    def _timeout(self) -> Any:
-        return getattr(self.credentials, "spark_submit_timeout", None)
-
-    def _s3a_conf(self, key: str) -> Any:
-        """Extract a --conf value from spark_submit_args by key prefix."""
-        extra = self._extra_args()
-        for i, a in enumerate(extra):
-            if a == "--conf" and i + 1 < len(extra) and extra[i + 1].startswith(key + "="):
-                return extra[i + 1].split("=", 1)[1]
-        return None
-
-    def _upload_script(self, compiled_code: str, staging_uri: str) -> tuple:
-        """Upload compiled_code to object storage. Returns (s3_client, bucket, key)."""
+    def _load_k8s_client(self) -> None:
+        """Load the Kubernetes client using in-cluster config."""
         try:
-            import boto3
-            from botocore.client import Config
+            from kubernetes import client, config as k8s_config
         except ImportError:
             raise DbtRuntimeError(
-                "boto3 is required for K8s cluster mode Python models. "
-                "Install it with: pip install dbt-iceberg[kubernetes]"
+                "kubernetes Python package is required for the kubernetes submission method. "
+                "Install with: pip install dbt-iceberg[kubernetes]"
             )
-
-        endpoint = self._s3a_conf("spark.hadoop.fs.s3a.endpoint")
-        access_key = self._s3a_conf("spark.hadoop.fs.s3a.access.key")
-        secret_key = self._s3a_conf("spark.hadoop.fs.s3a.secret.key")
-
-        # The s3a endpoint uses in-cluster DNS (e.g. http://minio:9000).
-        # The submitter runs outside the cluster so we need a host-accessible URL.
-        # Accept an explicit override via spark_s3_host_endpoint credential, otherwise
-        # derive it by replacing the in-cluster hostname with localhost.
-        host_endpoint = getattr(self.credentials, "spark_s3_host_endpoint", None) or (
-            endpoint.replace("minio", "localhost") if endpoint else None
-        )
-
-        # Parse staging URI: s3a://bucket[/prefix]
-        path = staging_uri.removeprefix("s3a://")
-        bucket, _, prefix = path.partition("/")
-        key = f"{prefix}/{self.schema}_{self.identifier}_{uuid.uuid4().hex}.py".lstrip("/")
-
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=host_endpoint,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            config=Config(signature_version="s3v4"),
-        )
-        s3.put_object(Bucket=bucket, Key=key, Body=compiled_code.encode())
-        return s3, bucket, key
-
-    # ------------------------------------------------------------------
-    # PythonJobHelper interface
-    # ------------------------------------------------------------------
-
-    def submit(self, compiled_code: str) -> None:
-        runner = getattr(self.credentials, "spark_kubernetes_runner", None)
-        staging_uri = getattr(self.credentials, "spark_script_staging_uri", None)
-
-        if runner and staging_uri:
-            self._submit_via_runner(compiled_code, runner, staging_uri)
-        else:
-            self._submit_local(compiled_code)
-
-    def _submit_via_runner(self, compiled_code: str, runner: str, staging_uri: str) -> None:
-        """K8s cluster mode: upload script to object storage, submit runner."""
-        s3, bucket, key = self._upload_script(compiled_code, staging_uri)
-        script_s3_uri = f"s3a://{bucket}/{key}"
-
         try:
-            cmd = (
-                [self._spark_submit_bin()]
-                + self._master_args()
-                + self._extra_args()
-                + ["--conf", f"spark.dbt.script.uri={script_s3_uri}"]
-                + [runner]
-            )
-            self._run_spark_submit(cmd)
-        finally:
-            try:
-                s3.delete_object(Bucket=bucket, Key=key)
-            except Exception:
-                pass
+            k8s_config.load_incluster_config()
+        except Exception:
+            # Fallback for local development / testing outside a cluster
+            k8s_config.load_kube_config()
+        self._k8s_batch = client.BatchV1Api()
+        self._k8s_core = client.CoreV1Api()
 
-    def _submit_local(self, compiled_code: str) -> None:
-        """Original path: write to local tmp file, pass path directly."""
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".py",
-            prefix=f"dbt_spark_{self.schema}_{self.identifier}_",
-            delete=False,
-        ) as tmp:
-            tmp.write(compiled_code)
-            tmp_path = tmp.name
+    def _get_namespace(self) -> str:
+        return getattr(self.credentials, "kubernetes_namespace", "default")
 
-        try:
-            cmd = [self._spark_submit_bin()] + self._master_args() + self._extra_args() + [tmp_path]
-            self._run_spark_submit(cmd)
-        finally:
+    def _get_service_account(self) -> str:
+        return getattr(self.credentials, "kubernetes_service_account", "default")
+
+    def _get_docker_image(self) -> str:
+        """Determine the Docker image to run.
+
+        Priority:
+        1. Explicit ``kubernetes_image`` in model config.
+        2. Auto-detect from ``file_extension`` model config key.
+        3. Scan ``data_folder/model_folder`` directory for a known extension.
+        4. Fallback to ``{image_registry}/dbt-iceberg-base:latest``.
+        """
+        registry: str = self.credentials.image_registry  # type: ignore[assignment]
+
+        explicit = self.parsed_model["config"].get("kubernetes_image", None)
+        if explicit:
+            return explicit
+
+        file_ext = self.parsed_model["config"].get("file_extension", None)
+        if file_ext:
+            ext = file_ext if file_ext.startswith(".") else f".{file_ext}"
+            suffix = EXTENSION_IMAGE_MAP.get(ext.lower(), DEFAULT_IMAGE_SUFFIX)
+            return f"{registry}/dbt-iceberg-{suffix}:latest"
+
+        model_folder = self.parsed_model["config"].get("data_folder", None)
+        base_folder = getattr(self.credentials, "data_folder", None)
+        if model_folder and base_folder:
+            full_path = os.path.join(base_folder, model_folder)
             try:
-                os.unlink(tmp_path)
+                for fname in os.listdir(full_path):
+                    ext = os.path.splitext(fname)[1].lower()
+                    if ext in EXTENSION_IMAGE_MAP:
+                        suffix = EXTENSION_IMAGE_MAP[ext]
+                        return f"{registry}/dbt-iceberg-{suffix}:latest"
             except OSError:
                 pass
 
-    def _run_spark_submit(self, cmd: list) -> None:
-        """Shared subprocess execution logic."""
+        return f"{registry}/dbt-iceberg-{DEFAULT_IMAGE_SUFFIX}:latest"
+
+    def _resource_name(self) -> str:
+        """Generate a unique K8s-safe resource name (max 63 chars)."""
+        safe_schema = re.sub(r"[^a-z0-9-]", "-", self.schema.lower())
+        safe_id = re.sub(r"[^a-z0-9-]", "-", self.identifier.lower())
+        unique = uuid.uuid4().hex[:8]
+        base = f"dbt-{safe_schema}-{safe_id}"[:50]
+        return f"{base}-{unique}"
+
+    def _create_configmap(self, name: str, compiled_code: str) -> None:
+        from kubernetes import client
+
+        configmap = client.V1ConfigMap(
+            metadata=client.V1ObjectMeta(
+                name=name,
+                namespace=self._get_namespace(),
+                labels={
+                    "app": "dbt-iceberg",
+                    "dbt-schema": self.schema,
+                    "dbt-model": self.identifier,
+                },
+            ),
+            data={"model.py": compiled_code},
+        )
+        self._k8s_core.create_namespaced_config_map(
+            namespace=self._get_namespace(),
+            body=configmap,
+        )
+
+    def _build_job_manifest(self, job_name: str, configmap_name: str, image: str) -> Any:
+        from kubernetes import client
+
+        creds = self.credentials
+        env_vars = [
+            client.V1EnvVar(name="ICEBERG_REST_URI",  value=creds.iceberg_rest_uri),
+            client.V1EnvVar(name="ICEBERG_WAREHOUSE", value=creds.iceberg_warehouse),
+            client.V1EnvVar(name="DBT_SCHEMA",        value=self.schema),
+            client.V1EnvVar(name="DBT_IDENTIFIER",    value=self.identifier),
+            client.V1EnvVar(name="DATA_FOLDER",       value=getattr(creds, "data_folder", "") or ""),
+            client.V1EnvVar(name="MODEL_FOLDER",      value=self.parsed_model["config"].get("data_folder", "")),
+        ]
+        if creds.iceberg_token:
+            env_vars.append(client.V1EnvVar(name="ICEBERG_TOKEN", value=creds.iceberg_token))
+
+        resource_requirements = self._get_resource_requirements()
+        container = client.V1Container(
+            name="dbt-model-runner",
+            image=image,
+            image_pull_policy=getattr(creds, "kubernetes_job_image_pull_policy", "IfNotPresent"),
+            env=env_vars,
+            volume_mounts=[
+                client.V1VolumeMount(
+                    name="model-code",
+                    mount_path="/opt/dbt/model.py",
+                    sub_path="model.py",
+                    read_only=True,
+                )
+            ],
+            resources=resource_requirements,
+        )
+        pod_spec = client.V1PodSpec(
+            restart_policy="Never",
+            service_account_name=self._get_service_account(),
+            containers=[container],
+            volumes=[
+                client.V1Volume(
+                    name="model-code",
+                    config_map=client.V1ConfigMapVolumeSource(name=configmap_name),
+                )
+            ],
+        )
+        return client.V1Job(
+            metadata=client.V1ObjectMeta(
+                name=job_name,
+                namespace=self._get_namespace(),
+                labels={
+                    "app": "dbt-iceberg",
+                    "dbt-schema": self.schema,
+                    "dbt-model": self.identifier,
+                },
+            ),
+            spec=client.V1JobSpec(
+                template=client.V1PodTemplateSpec(
+                    metadata=client.V1ObjectMeta(
+                        labels={
+                            "app": "dbt-iceberg",
+                            "dbt-schema": self.schema,
+                            "dbt-model": self.identifier,
+                        }
+                    ),
+                    spec=pod_spec,
+                ),
+                backoff_limit=0,
+                ttl_seconds_after_finished=300,
+            ),
+        )
+
+    def _get_resource_requirements(self) -> Optional[Any]:
+        try:
+            from kubernetes import client
+        except ImportError:
+            return None
+        config = self.parsed_model.get("config", {})
+        limits = config.get("kubernetes_resource_limits", None)
+        requests = config.get("kubernetes_resource_requests", None)
+        if limits or requests:
+            return client.V1ResourceRequirements(limits=limits, requests=requests)
+        return None
+
+    def _poll_job(self, job_name: str) -> None:
+        """Poll the Kubernetes Job until completion, timeout, or failure."""
         from dbt.adapters.events.logging import AdapterLogger
-
         _logger = AdapterLogger("Spark")
-        _logger.debug("spark-submit command: {}".format(cmd))
 
+        namespace = self._get_namespace()
+        start_time = time.time()
+
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed > self.timeout:
+                raise DbtRuntimeError(
+                    f"Kubernetes Job {job_name} timed out after {self.timeout} seconds "
+                    f"for model {self.schema}.{self.identifier}"
+                )
+            time.sleep(DEFAULT_POLLING_INTERVAL)
+
+            job = self._k8s_batch.read_namespaced_job(name=job_name, namespace=namespace)
+            status = job.status
+
+            if status.succeeded and status.succeeded >= 1:
+                return
+
+            if status.failed and status.failed >= 1:
+                logs = self._get_pod_logs(job_name)
+                raise DbtRuntimeError(
+                    f"Kubernetes Job {job_name} failed for model "
+                    f"{self.schema}.{self.identifier}.\n"
+                    f"Pod logs:\n{logs}"
+                )
+
+            active = status.active or 0
+            _logger.debug(f"Job {job_name}: active={active}, elapsed={elapsed:.0f}s")
+
+    def _get_pod_logs(self, job_name: str) -> str:
+        """Retrieve logs from the pod created by this Job."""
+        namespace = self._get_namespace()
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
+            pods = self._k8s_core.list_namespaced_pod(
+                namespace=namespace,
+                label_selector=f"job-name={job_name}",
             )
-        except FileNotFoundError as e:
-            raise DbtRuntimeError(
-                "Could not find spark-submit binary. "
-                "Set spark_home in your profile or ensure spark-submit is on PATH.\n"
-                f"Original error: {e}"
-            ) from e
+            if not pods.items:
+                return "(no pods found)"
+            pod_name = pods.items[0].metadata.name
+            return self._k8s_core.read_namespaced_pod_log(
+                name=pod_name,
+                namespace=namespace,
+                tail_lines=200,
+            )
+        except Exception as e:
+            return f"(could not retrieve pod logs: {e})"
 
-        output_lines = []
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            _logger.debug(line)
-            output_lines.append(line)
+    def _cleanup(self, job_name: str, configmap_name: str) -> None:
+        """Delete the Job and ConfigMap; ignore 404 errors."""
+        from dbt.adapters.events.logging import AdapterLogger
+        _logger = AdapterLogger("Spark")
 
-        timeout = self._timeout()
+        namespace = self._get_namespace()
         try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            raise DbtRuntimeError(
-                f"spark-submit job timed out after {timeout} seconds for model "
-                f"{self.schema}.{self.identifier}"
-            )
+            from kubernetes.client.rest import ApiException
+        except ImportError:
+            ApiException = Exception  # type: ignore[misc,assignment]
 
-        if proc.returncode != 0:
-            raise DbtRuntimeError(
-                f"spark-submit exited with code {proc.returncode} for model "
-                f"{self.schema}.{self.identifier}.\n"
-                + "\n".join(output_lines[-50:])  # last 50 lines for context
+        for resource, delete_fn, name in [
+            ("Job", self._k8s_batch.delete_namespaced_job, job_name),
+            ("ConfigMap", self._k8s_core.delete_namespaced_config_map, configmap_name),
+        ]:
+            try:
+                delete_fn(name=name, namespace=namespace)
+                _logger.debug(f"Deleted {resource} {name}")
+            except ApiException as e:
+                if hasattr(e, "status") and e.status != 404:
+                    _logger.warning(f"Could not delete {resource} {name}: {e}")
+            except Exception as e:
+                _logger.warning(f"Could not delete {resource} {name}: {e}")
+
+    def submit(self, compiled_code: str) -> None:
+        from dbt.adapters.events.logging import AdapterLogger
+        _logger = AdapterLogger("Spark")
+
+        self._load_k8s_client()
+        resource_name = self._resource_name()
+        image = self._get_docker_image()
+
+        _logger.debug(
+            f"Submitting Kubernetes Job for {self.schema}.{self.identifier} "
+            f"using image {image}"
+        )
+        try:
+            self._create_configmap(resource_name, compiled_code)
+            job_manifest = self._build_job_manifest(resource_name, resource_name, image)
+            self._k8s_batch.create_namespaced_job(
+                namespace=self._get_namespace(),
+                body=job_manifest,
             )
+            self._poll_job(resource_name)
+        finally:
+            self._cleanup(resource_name, resource_name)

@@ -195,3 +195,49 @@ def target_odbc_with_extra_conn(base_project_cfg):
             "target": "test",
         },
     )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def target_kubernetes(base_project_cfg):
+    return config_from_parts_or_dicts(
+        base_project_cfg,
+        {
+            "outputs": {
+                "test": {
+                    "type": "iceberg",
+                    "method": "kubernetes",
+                    "schema": "analytics",
+                    "iceberg_rest_uri": "http://iceberg-rest:8181",
+                    "iceberg_warehouse": "s3://warehouse/",
+                    "image_registry": "myregistry.io/dbt-iceberg",
+                    "kubernetes_namespace": "dbt-jobs",
+                    "kubernetes_service_account": "dbt-runner",
+                }
+            },
+            "target": "test",
+        },
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def target_kubernetes_with_thrift(base_project_cfg):
+    return config_from_parts_or_dicts(
+        base_project_cfg,
+        {
+            "outputs": {
+                "test": {
+                    "type": "iceberg",
+                    "method": "kubernetes",
+                    "schema": "analytics",
+                    "host": "thrift-server.namespace.svc.cluster.local",
+                    "port": 10000,
+                    "iceberg_rest_uri": "http://iceberg-rest:8181",
+                    "iceberg_warehouse": "s3://warehouse/",
+                    "image_registry": "myregistry.io/dbt-iceberg",
+                    "kubernetes_namespace": "dbt-jobs",
+                    "kubernetes_service_account": "dbt-runner",
+                }
+            },
+            "target": "test",
+        },
+    )

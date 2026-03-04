@@ -47,8 +47,6 @@ except ImportError:
 
 import base64
 import os
-import subprocess
-import tempfile
 import time
 
 logger = AdapterLogger("Spark")
@@ -82,9 +80,7 @@ class SparkConnectionMethod(StrEnum):
     HTTP = "http"
     ODBC = "odbc"
     SESSION = "session"
-    SPARK_SUBMIT = "spark_submit"
-    SPARK_SQL = "spark_sql"
-    SPARK_AUTO = "spark_auto"
+    KUBERNETES = "kubernetes"
 
 
 @dataclass
@@ -115,25 +111,24 @@ class SparkCredentials(Credentials):
     poll_interval: int = 5  # Polling interval in seconds for async queries
     query_retries: int = 1  # Number of times to retry on connection loss during query execution
 
-    # spark-submit / spark-sql CLI settings
-    spark_home: Optional[str] = None  # path to SPARK_HOME; uses $SPARK_HOME env var if unset
-    spark_submit_args: List[str] = field(default_factory=list)  # extra args for spark-submit
-    spark_sql_args: List[str] = field(default_factory=list)  # extra args for spark-sql (CLI mode only)
-    spark_submit_timeout: Optional[int] = None  # max seconds for spark-submit jobs (None = wait forever)
+    # Iceberg REST catalog (required for Python models running in Kubernetes containers)
+    iceberg_rest_uri: Optional[str] = None    # e.g. http://iceberg-rest:8181
+    iceberg_warehouse: Optional[str] = None   # e.g. s3://warehouse/
+    iceberg_token: Optional[str] = None       # optional Bearer token for REST catalog
 
-    # spark-sql thrift server settings (when host is set, connects via thrift instead of CLI)
-    spark_history_server: Optional[str] = None  # URL of the Spark History Server UI (informational)
-    spark_kubernetes_master: Optional[str] = None  # URL of the Kubernetes API server for spark-submit.
-    # When set, spark-submit is called with --master <value> --deploy-mode client.
-    # Example: "k8s://https://kubernetes.docker.internal:6443"
+    # Kubernetes Job settings (only used when method == "kubernetes")
+    kubernetes_namespace: str = "default"
+    kubernetes_service_account: str = "default"
+    kubernetes_job_timeout: int = 3600                        # seconds
+    kubernetes_job_image_pull_policy: str = "IfNotPresent"
 
-    # K8s cluster mode runner pattern (Option C)
-    # When both fields are set, compiled Python models are uploaded to object storage and
-    # submitted via a fixed runner script baked into the Spark image, instead of passing
-    # a local tmp file path (which is inaccessible to driver pods in cluster mode).
-    spark_kubernetes_runner: Optional[str] = None  # local:// URI of runner in image, e.g. local:///opt/dbt/runner.py
-    spark_script_staging_uri: Optional[str] = None  # S3 prefix for staged scripts, e.g. s3a://turk/dbt-scripts
-    spark_s3_host_endpoint: Optional[str] = None  # host-accessible S3 URL override, e.g. http://localhost:9000
+    # Docker image registry prefix
+    # Images are expected as {image_registry}/dbt-iceberg-excel:latest etc.
+    # Worker images are built and managed by the client project.
+    image_registry: Optional[str] = None
+
+    # File source base folder (mounted path inside pods, or S3 prefix)
+    data_folder: Optional[str] = None
 
     @classmethod
     def __pre_deserialize__(cls, data: Any) -> Any:
@@ -149,16 +144,20 @@ class SparkCredentials(Credentials):
     def __post_init__(self) -> None:
         if self.method is None:
             raise DbtRuntimeError("Must specify `method` in profile")
-        # spark-submit, spark-sql, and spark_auto use the local CLI; host is not required
-        if self.method not in (
-            SparkConnectionMethod.SPARK_SUBMIT,
-            SparkConnectionMethod.SPARK_SQL,
-            SparkConnectionMethod.SPARK_AUTO,
-        ) and self.host is None:
+        # kubernetes method doesn't require a host (SQL introspection is optional via thrift)
+        if self.method not in (SparkConnectionMethod.KUBERNETES,) and self.host is None:
             raise DbtRuntimeError("Must specify `host` in profile")
         if self.schema is None:
             raise DbtRuntimeError("Must specify `schema` in profile")
 
+        # Validate kubernetes-specific required fields
+        if self.method == SparkConnectionMethod.KUBERNETES:
+            if self.iceberg_rest_uri is None:
+                raise DbtRuntimeError("Must specify `iceberg_rest_uri` when using kubernetes method")
+            if self.iceberg_warehouse is None:
+                raise DbtRuntimeError("Must specify `iceberg_warehouse` when using kubernetes method")
+            if self.image_registry is None:
+                raise DbtRuntimeError("Must specify `image_registry` when using kubernetes method")
 
         if self.method == SparkConnectionMethod.ODBC:
             try:
@@ -182,12 +181,7 @@ class SparkCredentials(Credentials):
             self.method == SparkConnectionMethod.HTTP
             or self.method == SparkConnectionMethod.THRIFT
             or (
-                self.method
-                in (
-                    SparkConnectionMethod.SPARK_SQL,
-                    SparkConnectionMethod.SPARK_SUBMIT,
-                    SparkConnectionMethod.SPARK_AUTO,
-                )
+                self.method == SparkConnectionMethod.KUBERNETES
                 and self.host is not None
             )
         ) and not (ThriftState and THttpClient and hive):
@@ -232,7 +226,11 @@ class SparkCredentials(Credentials):
         return self.host or self.schema  # type: ignore
 
     def _connection_keys(self) -> Tuple[str, ...]:
-        return "host", "port", "cluster", "endpoint", "schema", "database", "organization"
+        return (
+            "host", "port", "cluster", "endpoint", "schema", "database",
+            "organization", "iceberg_rest_uri", "iceberg_warehouse",
+            "kubernetes_namespace", "image_registry",
+        )
 
 
 class SparkConnectionWrapper(ABC):
@@ -456,46 +454,30 @@ class PyodbcConnectionWrapper(PyhiveConnectionWrapper):
             self._cursor.execute(sql, *bindings)
 
 
-_IMMEDIATE_PREFIXES = ("select", "show", "describe", "explain", "with")
+class NoOpSqlConnectionWrapper(SparkConnectionWrapper):
+    """No-op SQL wrapper for the kubernetes method when no thrift host is configured.
 
-
-class SparkSqlCliConnectionWrapper(SparkConnectionWrapper):
-    """Execute SQL via the spark-sql CLI (spark-sql -e '...').
-
-    DDL/DML statements (CREATE, DROP, INSERT, etc.) are buffered and submitted
-    as a single batch via ``spark-sql -f <file>`` when a result-returning query
-    arrives or when the connection is closed.  This avoids spinning up a new
-    Spark application (K8s pod) for every individual statement.
+    dbt's internal machinery issues SQL statements (SHOW SCHEMAS, SHOW TABLES, etc.)
+    for catalog introspection. This wrapper returns empty results for all queries so
+    dbt can operate without a running Spark/Hive thrift server. Python models are
+    submitted via KubernetesPythonJobHelper instead.
     """
 
-    def __init__(self, spark_home: Optional[str], extra_args: List[str], schema: str) -> None:
-        self._spark_home = spark_home
-        self._extra_args = extra_args
+    def __init__(self, schema: str) -> None:
         self._schema = schema
         self._rows: List[tuple] = []
         self._description: Sequence[
             Tuple[str, Any, Optional[int], Optional[int], Optional[int], Optional[int], bool]
         ] = []
-        self._pending: List[str] = []  # buffered DDL statements
 
-    def _spark_sql_bin(self) -> str:
-        home = self._spark_home or os.environ.get("SPARK_HOME", "")
-        if home:
-            return os.path.join(home, "bin", "spark-sql")
-        return "spark-sql"
-
-    def _needs_result(self, sql: str) -> bool:
-        """Return True for statements whose output dbt reads immediately."""
-        return sql.strip().lstrip("(").lower().startswith(_IMMEDIATE_PREFIXES)
-
-    def cursor(self) -> "SparkSqlCliConnectionWrapper":
+    def cursor(self) -> "NoOpSqlConnectionWrapper":
         return self
 
     def cancel(self) -> None:
         pass
 
     def close(self) -> None:
-        self._flush()
+        pass
 
     def rollback(self) -> None:
         logger.debug("NotImplemented: rollback")
@@ -504,97 +486,8 @@ class SparkSqlCliConnectionWrapper(SparkConnectionWrapper):
         return self._rows
 
     def execute(self, sql: str, bindings: Optional[List[Any]] = None) -> None:
-        if sql.strip().endswith(";"):
-            sql = sql.strip()[:-1]
-
-        if self._needs_result(sql):
-            # Flush any pending DDL first so schema state is consistent, then
-            # run this query immediately so dbt can read its results.
-            self._flush()
-            self._run_immediate(f"USE {self._schema};\n{sql}")
-        else:
-            # Buffer DDL/DML; USE schema will be prepended at flush time.
-            self._pending.append(sql)
-            self._rows = []
-            self._description = []
-
-    def _flush(self) -> None:
-        """Submit all buffered DDL statements as a single spark-sql -f job."""
-        if not self._pending:
-            return
-        stmts = [f"USE {self._schema}"] + self._pending
-        sql_file = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".sql", prefix="dbt_spark_batch_", delete=False
-        )
-        try:
-            sql_file.write(";\n".join(stmts) + ";")
-            sql_file.close()
-            cmd = [self._spark_sql_bin()] + self._extra_args + ["-f", sql_file.name]
-            logger.debug("spark-sql batch command: {}".format(cmd))
-            try:
-                result = subprocess.run(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=False,
-                )
-            except FileNotFoundError as e:
-                raise DbtRuntimeError(
-                    f"Could not find spark-sql binary. "
-                    f"Set spark_home in your profile or ensure spark-sql is on PATH.\n"
-                    f"Original error: {e}"
-                ) from e
-            if result.returncode != 0:
-                raise DbtDatabaseError(
-                    f"spark-sql batch exited with code {result.returncode}.\n"
-                    f"stderr: {result.stderr}\nstdout: {result.stdout}"
-                )
-        finally:
-            os.unlink(sql_file.name)
-            self._pending = []
-
-    def _run_immediate(self, full_sql: str) -> None:
-        """Run a single SQL string via spark-sql -e and capture output."""
-        cmd = [self._spark_sql_bin()] + self._extra_args + ["-e", full_sql]
-        logger.debug("spark-sql command: {}".format(cmd))
-
-        try:
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-            )
-        except FileNotFoundError as e:
-            raise DbtRuntimeError(
-                f"Could not find spark-sql binary. "
-                f"Set spark_home in your profile or ensure spark-sql is on PATH.\n"
-                f"Original error: {e}"
-            ) from e
-
-        if result.returncode != 0:
-            raise DbtDatabaseError(
-                f"spark-sql exited with code {result.returncode}.\n"
-                f"stderr: {result.stderr}\n"
-                f"stdout: {result.stdout}"
-            )
-
-        # Parse TSV output into rows; spark-sql prints tab-separated values
-        lines = [line for line in result.stdout.splitlines() if line.strip()]
         self._rows = []
         self._description = []
-        if lines:
-            # spark-sql does not emit a header row by default; treat all lines as data
-            for line in lines:
-                self._rows.append(tuple(line.split("\t")))
-            if self._rows:
-                ncols = len(self._rows[0])
-                # Build a minimal description with unknown column names
-                self._description = [
-                    (f"col{i}", "string", None, None, None, None, True) for i in range(ncols)
-                ]
 
     @property
     def description(
@@ -822,58 +715,13 @@ class SparkConnectionManager(SQLConnectionManager):
                     handle = SessionConnectionWrapper(
                         Connection(server_side_parameters=creds.server_side_parameters)
                     )
-                elif creds.method == SparkConnectionMethod.SPARK_SQL:
-                    if creds.host is not None:
-                        # Thrift server mode: connect to a long-running HiveThriftServer2
-                        # instead of spawning a new Spark CLI process per batch.
-                        handle = cls._open_thrift(creds)
-                    else:
-                        # CLI mode: invoke spark-sql as a subprocess (no long-running server).
-                        handle = SparkSqlCliConnectionWrapper(
-                            spark_home=creds.spark_home,
-                            extra_args=creds.spark_sql_args,
-                            schema=creds.schema,
-                        )
-                elif creds.method == SparkConnectionMethod.SPARK_SUBMIT:
-                    # spark-submit handles Python models via PythonJobHelper.
-                    # For SQL statements issued by dbt internals (e.g. show schemas) we
-                    # fall back to thrift (when host is set) or spark-sql CLI so the adapter
-                    # can still introspect the metastore.
+                elif creds.method == SparkConnectionMethod.KUBERNETES:
+                    # SQL introspection via Thrift when a host is configured;
+                    # otherwise use a no-op wrapper (Python models use KubernetesPythonJobHelper).
                     if creds.host is not None:
                         handle = cls._open_thrift(creds)
                     else:
-                        handle = SparkSqlCliConnectionWrapper(
-                            spark_home=creds.spark_home,
-                            extra_args=creds.spark_sql_args,
-                            schema=creds.schema,
-                        )
-                elif creds.method == SparkConnectionMethod.SPARK_AUTO:
-                    # Try Thrift first; fall back to spark-sql CLI if unreachable.
-                    # Python models always use spark-submit regardless of this connection.
-                    if creds.host is not None:
-                        try:
-                            handle = cls._open_thrift(creds)
-                            logger.debug(
-                                "spark_auto: connected via Thrift to {}:{}".format(
-                                    creds.host, creds.port
-                                )
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                "spark_auto: Thrift connection to {}:{} failed ({}), "
-                                "falling back to spark-sql CLI".format(creds.host, creds.port, e)
-                            )
-                            handle = SparkSqlCliConnectionWrapper(
-                                spark_home=creds.spark_home,
-                                extra_args=creds.spark_sql_args,
-                                schema=creds.schema,
-                            )
-                    else:
-                        handle = SparkSqlCliConnectionWrapper(
-                            spark_home=creds.spark_home,
-                            extra_args=creds.spark_sql_args,
-                            schema=creds.schema,
-                        )
+                        handle = NoOpSqlConnectionWrapper(schema=creds.schema)
                 else:
                     raise DbtConfigError(f"invalid credential method: {creds.method}")
                 break

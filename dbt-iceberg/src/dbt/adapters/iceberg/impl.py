@@ -39,7 +39,7 @@ from dbt.adapters.iceberg import SparkColumn
 from dbt.adapters.iceberg.python_submissions import (
     JobClusterPythonJobHelper,
     AllPurposeClusterPythonJobHelper,
-    SparkSubmitPythonJobHelper,
+    KubernetesPythonJobHelper,
 )
 from dbt.adapters.base import BaseRelation
 from dbt.adapters.contracts.relation import RelationType, RelationConfig
@@ -492,12 +492,8 @@ class SparkAdapter(SQLAdapter):
         from dbt.adapters.iceberg.connections import SparkConnectionMethod
 
         creds = self.config.credentials
-        if getattr(creds, "method", None) in (
-            SparkConnectionMethod.SPARK_SUBMIT,
-            SparkConnectionMethod.SPARK_SQL,
-            SparkConnectionMethod.SPARK_AUTO,
-        ):
-            return "spark_submit"
+        if getattr(creds, "method", None) == SparkConnectionMethod.KUBERNETES:
+            return "kubernetes"
         return "all_purpose_cluster"
 
     @property
@@ -505,7 +501,7 @@ class SparkAdapter(SQLAdapter):
         return {
             "job_cluster": JobClusterPythonJobHelper,
             "all_purpose_cluster": AllPurposeClusterPythonJobHelper,
-            "spark_submit": SparkSubmitPythonJobHelper,
+            "kubernetes": KubernetesPythonJobHelper,
         }
 
     def standardize_grants_dict(self, grants_table: "agate.Table") -> dict:

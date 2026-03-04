@@ -54,46 +54,33 @@ prompts:
         default: 1
         type: "int"
         hint: "number of times to retry on connection loss during query execution"
-    spark_sql:
-      _fixed_method: spark_sql
-      spark_home:
-        hint: "/opt/spark"
+    kubernetes:
+      _fixed_method: kubernetes
+      iceberg_rest_uri:
+        hint: "http://iceberg-rest:8181"
+      iceberg_warehouse:
+        hint: "s3://my-bucket/warehouse/"
+      iceberg_token:
+        hint: "optional bearer token for REST catalog"
         required: false
-      spark_sql_args:
-        hint: '["--master", "local[*]"]'
+        hide_input: true
+      image_registry:
+        hint: "myregistry.io/dbt-iceberg"
+      kubernetes_namespace:
+        hint: "dbt-jobs"
+        default: "default"
         required: false
-    spark_submit:
-      _fixed_method: spark_submit
-      spark_home:
-        hint: "/opt/spark"
+      kubernetes_service_account:
+        hint: "dbt-runner"
+        default: "default"
         required: false
-      spark_submit_args:
-        hint: '["--master", "local[*]"]'
-        required: false
-      spark_sql_args:
-        hint: '["--master", "local[*]"]'
-        required: false
-      spark_submit_timeout:
+      kubernetes_job_timeout:
         type: "int"
-        hint: "maximum seconds to wait for spark-submit to complete (optional)"
+        default: 3600
+        hint: "maximum seconds to wait for a Kubernetes Job to complete"
         required: false
-    spark_auto:
-      _fixed_method: spark_auto
-      host:
-        hint: "127.0.0.1"
-        required: false
-      spark_home:
-        hint: "/opt/spark"
-        required: false
-      spark_sql_args:
-        hint: '["--master", "local[*]"]'
-        required: false
-      spark_submit_args:
-        hint: '["--conf", "spark.sql.extensions=..."]'
-        required: false
-      spark_submit_timeout:
-        type: "int"
-        hint: "maximum seconds to wait for spark-submit to complete (optional)"
+      data_folder:
+        hint: "/data"
         required: false
   port:
     default: 443
