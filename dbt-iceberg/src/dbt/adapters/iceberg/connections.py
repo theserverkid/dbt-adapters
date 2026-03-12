@@ -587,6 +587,7 @@ class SparkConnectionManager(SQLConnectionManager):
                 auth=creds.auth,
                 kerberos_service_name=creds.kerberos_service_name,
                 password=creds.password,
+                database=creds.database,
                 configuration=creds.server_side_parameters,
             )
         handle = PyhiveConnectionWrapper(
