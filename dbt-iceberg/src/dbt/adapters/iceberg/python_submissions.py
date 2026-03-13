@@ -488,10 +488,17 @@ class KubernetesPythonJobHelper(PythonJobHelper):
             ],
             resources=resource_requirements,
         )
+        image_pull_secret = getattr(creds, "kubernetes_image_pull_secret", None)
+        image_pull_secrets = (
+            [client.V1LocalObjectReference(name=image_pull_secret)]
+            if image_pull_secret
+            else None
+        )
         pod_spec = client.V1PodSpec(
             restart_policy="Never",
             service_account_name=self._get_service_account(),
             containers=[container],
+            image_pull_secrets=image_pull_secrets,
             volumes=[
                 client.V1Volume(
                     name="model-code",

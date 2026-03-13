@@ -136,6 +136,9 @@ class SparkCredentials(Credentials):
     # Useful for providing S3/MinIO credentials (e.g. S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY).
     kubernetes_env_secret: Optional[str] = None
 
+    # Optional Kubernetes image pull secret for pulling images from private registries (e.g. GHCR).
+    kubernetes_image_pull_secret: Optional[str] = None
+
     @classmethod
     def __pre_deserialize__(cls, data: Any) -> Any:
         data = super().__pre_deserialize__(data)
