@@ -1,13 +1,13 @@
 import pytest
 
-from dbt.adapters.iceberg.connections import SparkConnectionMethod, SparkCredentials
+from dbt.adapters.iceberg.connections import IcebergEngine, IcebergCredentials
 from dbt_common.exceptions import DbtRuntimeError
 
 
 def test_credentials_server_side_parameters_keys_and_values_are_strings() -> None:
-    credentials = SparkCredentials(
+    credentials = IcebergCredentials(
         host="localhost",
-        method=SparkConnectionMethod.THRIFT,  # type:ignore
+        engine=IcebergEngine.THRIFT,  # type:ignore
         database="tests",
         schema="tests",
         server_side_parameters={"spark.configuration": "10"},
@@ -16,9 +16,9 @@ def test_credentials_server_side_parameters_keys_and_values_are_strings() -> Non
 
 
 def test_credentials_server_side_parameters_ansi_disabled_cannot_be_overridden() -> None:
-    credentials = SparkCredentials(
+    credentials = IcebergCredentials(
         host="localhost",
-        method=SparkConnectionMethod.THRIFT,  # type:ignore
+        engine=IcebergEngine.THRIFT,  # type:ignore
         database="tests",
         schema="tests",
         server_side_parameters={"spark.sql.ansi.enabled": "true"},
@@ -27,9 +27,9 @@ def test_credentials_server_side_parameters_ansi_disabled_cannot_be_overridden()
 
 
 def test_credentials_server_side_parameters_ansi_disabled_default() -> None:
-    credentials = SparkCredentials(
+    credentials = IcebergCredentials(
         host="localhost",
-        method=SparkConnectionMethod.THRIFT,  # type:ignore
+        engine=IcebergEngine.THRIFT,  # type:ignore
         database="tests",
         schema="tests",
     )
@@ -37,9 +37,9 @@ def test_credentials_server_side_parameters_ansi_disabled_default() -> None:
 
 
 def test_credentials_server_side_parameters_default_catalog_preserved() -> None:
-    credentials = SparkCredentials(
+    credentials = IcebergCredentials(
         host="localhost",
-        method=SparkConnectionMethod.THRIFT,  # type:ignore
+        engine=IcebergEngine.THRIFT,  # type:ignore
         database="tests",
         schema="tests",
         server_side_parameters={"spark.sql.defaultCatalog": "turk_catalog"},
@@ -51,8 +51,8 @@ def test_credentials_server_side_parameters_default_catalog_preserved() -> None:
 
 
 def test_kubernetes_credentials_valid() -> None:
-    credentials = SparkCredentials(
-        method=SparkConnectionMethod.KUBERNETES,  # type:ignore
+    credentials = IcebergCredentials(
+        engine=IcebergEngine.KUBERNETES,  # type:ignore
         schema="my_schema",
         iceberg_rest_uri="http://iceberg-rest:8181",
         iceberg_warehouse="s3://warehouse/",
@@ -71,8 +71,8 @@ def test_kubernetes_credentials_valid() -> None:
 
 def test_kubernetes_credentials_with_thrift_host() -> None:
     """kubernetes method can also have a host for SQL introspection via thrift."""
-    credentials = SparkCredentials(
-        method=SparkConnectionMethod.KUBERNETES,  # type:ignore
+    credentials = IcebergCredentials(
+        engine=IcebergEngine.KUBERNETES,  # type:ignore
         schema="my_schema",
         host="thrift-server",
         port=10000,
@@ -85,8 +85,8 @@ def test_kubernetes_credentials_with_thrift_host() -> None:
 
 
 def test_kubernetes_credentials_with_optional_token() -> None:
-    credentials = SparkCredentials(
-        method=SparkConnectionMethod.KUBERNETES,  # type:ignore
+    credentials = IcebergCredentials(
+        engine=IcebergEngine.KUBERNETES,  # type:ignore
         schema="my_schema",
         iceberg_rest_uri="http://iceberg-rest:8181",
         iceberg_warehouse="s3://warehouse/",
@@ -98,8 +98,8 @@ def test_kubernetes_credentials_with_optional_token() -> None:
 
 def test_kubernetes_credentials_missing_rest_uri_raises() -> None:
     with pytest.raises(DbtRuntimeError, match="iceberg_rest_uri"):
-        SparkCredentials(
-            method=SparkConnectionMethod.KUBERNETES,  # type:ignore
+        IcebergCredentials(
+            engine=IcebergEngine.KUBERNETES,  # type:ignore
             schema="my_schema",
             iceberg_warehouse="s3://warehouse/",
             image_registry="myregistry.io/dbt-iceberg",
@@ -108,8 +108,8 @@ def test_kubernetes_credentials_missing_rest_uri_raises() -> None:
 
 def test_kubernetes_credentials_missing_warehouse_raises() -> None:
     with pytest.raises(DbtRuntimeError, match="iceberg_warehouse"):
-        SparkCredentials(
-            method=SparkConnectionMethod.KUBERNETES,  # type:ignore
+        IcebergCredentials(
+            engine=IcebergEngine.KUBERNETES,  # type:ignore
             schema="my_schema",
             iceberg_rest_uri="http://iceberg-rest:8181",
             image_registry="myregistry.io/dbt-iceberg",
@@ -118,8 +118,8 @@ def test_kubernetes_credentials_missing_warehouse_raises() -> None:
 
 def test_kubernetes_credentials_missing_image_registry_raises() -> None:
     with pytest.raises(DbtRuntimeError, match="image_registry"):
-        SparkCredentials(
-            method=SparkConnectionMethod.KUBERNETES,  # type:ignore
+        IcebergCredentials(
+            engine=IcebergEngine.KUBERNETES,  # type:ignore
             schema="my_schema",
             iceberg_rest_uri="http://iceberg-rest:8181",
             iceberg_warehouse="s3://warehouse/",
@@ -127,8 +127,8 @@ def test_kubernetes_credentials_missing_image_registry_raises() -> None:
 
 
 def test_kubernetes_credentials_custom_timeout() -> None:
-    credentials = SparkCredentials(
-        method=SparkConnectionMethod.KUBERNETES,  # type:ignore
+    credentials = IcebergCredentials(
+        engine=IcebergEngine.KUBERNETES,  # type:ignore
         schema="my_schema",
         iceberg_rest_uri="http://iceberg-rest:8181",
         iceberg_warehouse="s3://warehouse/",

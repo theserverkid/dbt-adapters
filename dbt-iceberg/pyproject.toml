@@ -43,6 +43,12 @@ kubernetes = [
     "kubernetes>=28.0",
     "pyiceberg[s3fs,rest]>=0.7.0",
 ]
+# Polars engine: in-process SQL execution via Polars SQLContext + PyIceberg (no JVM required)
+polars = [
+    "polars>=1.0.0",
+    "pyiceberg[s3fs,rest]>=0.7.0",
+    "pyarrow>=15.0.0",
+]
 all = [
     "pyodbc>=5.1,<5.3",
     "PyHive[hive_pure_sasl]~=0.7.0",
@@ -50,6 +56,8 @@ all = [
     "pyspark>=3.0.0,<5.0.0",
     "kubernetes>=28.0",
     "pyiceberg[s3fs,rest]>=0.7.0",
+    "polars>=1.0.0",
+    "pyarrow>=15.0.0",
 ]
 
 [project.entry-points."dbt.adapters"]

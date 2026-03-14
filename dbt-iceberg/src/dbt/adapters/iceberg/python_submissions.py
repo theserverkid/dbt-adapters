@@ -9,7 +9,7 @@ import uuid
 from dbt.adapters.base import PythonJobHelper
 from dbt_common.exceptions import DbtRuntimeError
 
-from dbt.adapters.iceberg import SparkCredentials
+from dbt.adapters.iceberg import IcebergCredentials
 from dbt.adapters.iceberg import __version__
 
 DEFAULT_POLLING_INTERVAL = 10
@@ -19,7 +19,7 @@ DBT_SPARK_VERSION = __version__.version
 
 
 class BaseDatabricksHelper(PythonJobHelper):
-    def __init__(self, parsed_model: Dict, credentials: SparkCredentials) -> None:
+    def __init__(self, parsed_model: Dict, credentials: IcebergCredentials) -> None:
         self.credentials = credentials
         self.identifier = parsed_model["alias"]
         self.schema = parsed_model["schema"]
@@ -188,7 +188,7 @@ class JobClusterPythonJobHelper(BaseDatabricksHelper):
 
 
 class DBContext:
-    def __init__(self, credentials: SparkCredentials, cluster_id: str, auth_header: dict) -> None:
+    def __init__(self, credentials: IcebergCredentials, cluster_id: str, auth_header: dict) -> None:
         self.auth_header = auth_header
         self.cluster_id = cluster_id
         self.host = credentials.host
@@ -223,7 +223,7 @@ class DBContext:
 
 
 class DBCommand:
-    def __init__(self, credentials: SparkCredentials, cluster_id: str, auth_header: dict) -> None:
+    def __init__(self, credentials: IcebergCredentials, cluster_id: str, auth_header: dict) -> None:
         self.auth_header = auth_header
         self.cluster_id = cluster_id
         self.host = credentials.host
@@ -345,7 +345,7 @@ class KubernetesPythonJobHelper(PythonJobHelper):
       timeout           – Job timeout in seconds (overrides profile default).
     """
 
-    def __init__(self, parsed_model: Dict, credentials: "SparkCredentials") -> None:  # type: ignore[name-defined]
+    def __init__(self, parsed_model: Dict, credentials: "IcebergCredentials") -> None:  # type: ignore[name-defined]
         self.parsed_model = parsed_model
         self.credentials = credentials
         self.identifier = parsed_model["alias"]
@@ -547,7 +547,7 @@ class KubernetesPythonJobHelper(PythonJobHelper):
     def _poll_job(self, job_name: str) -> None:
         """Poll the Kubernetes Job until completion, timeout, or failure."""
         from dbt.adapters.events.logging import AdapterLogger
-        _logger = AdapterLogger("Spark")
+        _logger = AdapterLogger("Iceberg")
 
         namespace = self._get_namespace()
         start_time = time.time()
@@ -600,7 +600,7 @@ class KubernetesPythonJobHelper(PythonJobHelper):
     def _cleanup(self, job_name: str, configmap_name: str) -> None:
         """Delete the Job and ConfigMap; ignore 404 errors."""
         from dbt.adapters.events.logging import AdapterLogger
-        _logger = AdapterLogger("Spark")
+        _logger = AdapterLogger("Iceberg")
 
         namespace = self._get_namespace()
         try:
@@ -623,7 +623,7 @@ class KubernetesPythonJobHelper(PythonJobHelper):
 
     def submit(self, compiled_code: str) -> None:
         from dbt.adapters.events.logging import AdapterLogger
-        _logger = AdapterLogger("Spark")
+        _logger = AdapterLogger("Iceberg")
 
         self._load_k8s_client()
         resource_name = self._resource_name()

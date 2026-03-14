@@ -6,7 +6,7 @@ import datetime as dt
 from types import TracebackType
 from typing import Any, Dict, List, Optional, Tuple, Union, Sequence
 
-from dbt.adapters.iceberg.connections import SparkConnectionWrapper
+from dbt.adapters.iceberg.connections import IcebergConnectionWrapper
 from dbt.adapters.events.logging import AdapterLogger
 from dbt_common.utils.encoding import DECIMALS
 from dbt_common.exceptions import DbtRuntimeError
@@ -14,7 +14,7 @@ from pyspark.sql import DataFrame, Row, SparkSession
 from pyspark.sql.utils import AnalysisException
 
 
-logger = AdapterLogger("Spark")
+logger = AdapterLogger("Iceberg")
 NUMBERS = DECIMALS + (int, float)
 
 
@@ -190,7 +190,7 @@ class Connection:
         return Cursor(server_side_parameters=self.server_side_parameters)
 
 
-class SessionConnectionWrapper(SparkConnectionWrapper):
+class SessionConnectionWrapper(IcebergConnectionWrapper):
     """Connection wrapper for the session connection method."""
 
     handle: Connection

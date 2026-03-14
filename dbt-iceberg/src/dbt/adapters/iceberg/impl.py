@@ -33,9 +33,9 @@ if TYPE_CHECKING:
 from dbt.adapters.base import AdapterConfig, PythonJobHelper
 from dbt.adapters.base.impl import catch_as_completed, ConstraintSupport
 from dbt.adapters.sql import SQLAdapter
-from dbt.adapters.iceberg import SparkConnectionManager
-from dbt.adapters.iceberg import SparkRelation
-from dbt.adapters.iceberg import SparkColumn
+from dbt.adapters.iceberg import IcebergConnectionManager
+from dbt.adapters.iceberg import IcebergRelation
+from dbt.adapters.iceberg import IcebergColumn
 from dbt.adapters.iceberg.python_submissions import (
     JobClusterPythonJobHelper,
     AllPurposeClusterPythonJobHelper,
@@ -46,7 +46,7 @@ from dbt.adapters.contracts.relation import RelationType, RelationConfig
 from dbt_common.clients.agate_helper import DEFAULT_TYPE_TESTER
 from dbt_common.contracts.constraints import ConstraintType
 
-logger = AdapterLogger("Spark")
+logger = AdapterLogger("Iceberg")
 packages = ["pyhive.hive", "thrift.transport", "thrift.protocol"]
 log_level = os.getenv("DBT_SPARK_LOG_LEVEL", "ERROR")
 for package in packages:
@@ -70,7 +70,7 @@ TABLE_OR_VIEW_NOT_FOUND_MESSAGES = (
 
 
 @dataclass
-class SparkConfig(AdapterConfig):
+class IcebergConfig(AdapterConfig):
     file_format: str = "parquet"
     location_root: Optional[str] = None
     partition_by: Optional[Union[List[str], str]] = None
@@ -80,7 +80,7 @@ class SparkConfig(AdapterConfig):
     merge_update_columns: Optional[str] = None
 
 
-class SparkAdapter(SQLAdapter):
+class IcebergAdapter(SQLAdapter):
     COLUMN_NAMES = (
         "table_database",
         "table_schema",
@@ -121,11 +121,11 @@ class SparkAdapter(SQLAdapter):
         ConstraintType.foreign_key: ConstraintSupport.NOT_ENFORCED,
     }
 
-    Relation: TypeAlias = SparkRelation
+    Relation: TypeAlias = IcebergRelation
     RelationInfo = Tuple[str, str, str]
-    Column: TypeAlias = SparkColumn
-    ConnectionManager: TypeAlias = SparkConnectionManager
-    AdapterSpecificConfigs: TypeAlias = SparkConfig
+    Column: TypeAlias = IcebergColumn
+    ConnectionManager: TypeAlias = IcebergConnectionManager
+    AdapterSpecificConfigs: TypeAlias = IcebergConfig
 
     @classmethod
     def date_function(cls) -> str:
@@ -278,7 +278,7 @@ class SparkAdapter(SQLAdapter):
 
     def parse_describe_extended(
         self, relation: BaseRelation, raw_rows: AttrDict
-    ) -> List[SparkColumn]:
+    ) -> List[IcebergColumn]:
         # Convert the Row to a dict
         dict_rows = [dict(zip(row._keys, row._values)) for row in raw_rows]
         # Find the separator between the rows and the metadata provided
@@ -290,9 +290,9 @@ class SparkAdapter(SQLAdapter):
         metadata = {col["col_name"]: col["data_type"] for col in raw_rows[pos + 1 :]}
 
         raw_table_stats = metadata.get(KEY_TABLE_STATISTICS)
-        table_stats = SparkColumn.convert_table_stats(raw_table_stats)
+        table_stats = IcebergColumn.convert_table_stats(raw_table_stats)
         return [
-            SparkColumn(
+            IcebergColumn(
                 table_database=None,
                 table_schema=relation.schema,
                 table_name=relation.name,
@@ -315,7 +315,7 @@ class SparkAdapter(SQLAdapter):
             pos += 1
         return pos
 
-    def get_columns_in_relation(self, relation: BaseRelation) -> List[SparkColumn]:
+    def get_columns_in_relation(self, relation: BaseRelation) -> List[IcebergColumn]:
         columns = []
         try:
             rows: AttrDict = self.execute_macro(
@@ -336,7 +336,7 @@ class SparkAdapter(SQLAdapter):
         columns = [x for x in columns if x.name not in self.HUDI_METADATA_COLUMNS]
         return columns
 
-    def parse_columns_from_information(self, relation: BaseRelation) -> List[SparkColumn]:
+    def parse_columns_from_information(self, relation: BaseRelation) -> List[IcebergColumn]:
         if hasattr(relation, "information"):
             information = relation.information or ""
         else:
@@ -347,10 +347,10 @@ class SparkAdapter(SQLAdapter):
         columns = []
         stats_match = re.findall(self.INFORMATION_STATISTICS_REGEX, information)
         raw_table_stats = stats_match[0] if stats_match else None
-        table_stats = SparkColumn.convert_table_stats(raw_table_stats)
+        table_stats = IcebergColumn.convert_table_stats(raw_table_stats)
         for match_num, match in enumerate(matches):
             column_name, column_type, nullable = match.groups()
-            column = SparkColumn(
+            column = IcebergColumn(
                 table_database=None,
                 table_schema=relation.schema,
                 table_name=relation.table,
@@ -368,7 +368,7 @@ class SparkAdapter(SQLAdapter):
         columns = self.parse_columns_from_information(relation)
 
         for column in columns:
-            # convert SparkColumns into catalog dicts
+            # convert IcebergColumns into catalog dicts
             as_dict = column.to_column_dict()
             as_dict["column_name"] = as_dict.pop("column", None)
             as_dict["column_type"] = as_dict.pop("dtype")
@@ -489,10 +489,10 @@ class SparkAdapter(SQLAdapter):
 
     @property
     def default_python_submission_method(self) -> str:
-        from dbt.adapters.iceberg.connections import SparkConnectionMethod
+        from dbt.adapters.iceberg.connections import IcebergEngine
 
         creds = self.config.credentials
-        if getattr(creds, "method", None) == SparkConnectionMethod.KUBERNETES:
+        if getattr(creds, "engine", None) in (IcebergEngine.KUBERNETES, IcebergEngine.POLARS):
             return "kubernetes"
         return "all_purpose_cluster"
 

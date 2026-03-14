@@ -3,7 +3,7 @@ from unittest import mock
 import dbt.adapters.__about__
 import dbt.adapters.iceberg.__version__
 
-from dbt.adapters.iceberg.impl import SparkAdapter
+from dbt.adapters.iceberg.impl import IcebergAdapter
 from dbt.adapters.base.relation import AdapterTrackingRelationInfo
 
 
@@ -20,7 +20,7 @@ def assert_telemetry_data(adapter_type: str, file_format: str):
         "file_format": file_format,
     }
 
-    res = SparkAdapter.get_adapter_run_info(mock_model_config)
+    res = IcebergAdapter.get_adapter_run_info(mock_model_config)
 
     assert res.adapter_name == adapter_type
     assert res.base_adapter_version == dbt.adapters.__about__.version

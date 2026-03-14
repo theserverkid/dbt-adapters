@@ -11,7 +11,7 @@ try:
 except ImportError:
     pass
 
-from dbt.adapters.iceberg.connections import SparkConnectionManager
+from dbt.adapters.iceberg.connections import IcebergConnectionManager
 
 
 HOST = "https://" + getenv("DBT_DATABRICKS_HOST_NAME")
@@ -50,7 +50,7 @@ def _wait_for_databricks_cluster() -> None:
 
 
 def _transport_client():
-    conn_url = SparkConnectionManager.SPARK_CONNECTION_URL.format(
+    conn_url = IcebergConnectionManager.SPARK_CONNECTION_URL.format(
         host=HOST,
         cluster=CLUSTER,
         port=PORT,

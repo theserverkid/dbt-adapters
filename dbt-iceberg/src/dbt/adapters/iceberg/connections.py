@@ -49,7 +49,7 @@ import base64
 import os
 import time
 
-logger = AdapterLogger("Spark")
+logger = AdapterLogger("Iceberg")
 
 NUMBERS = DECIMALS + (int, float)
 
@@ -75,19 +75,20 @@ def _build_odbc_connnection_string(**kwargs: Any) -> str:
     return ";".join([f"{k}={v}" for k, v in kwargs.items()])
 
 
-class SparkConnectionMethod(StrEnum):
+class IcebergEngine(StrEnum):
     THRIFT = "thrift"
     HTTP = "http"
     ODBC = "odbc"
     SESSION = "session"
     KUBERNETES = "kubernetes"
+    POLARS = "polars"
 
 
 @dataclass
-class SparkCredentials(Credentials):
+class IcebergCredentials(Credentials):
     host: Optional[str] = None
     schema: Optional[str] = None  # type:ignore
-    method: SparkConnectionMethod = None  # type: ignore
+    engine: IcebergEngine = None  # type: ignore
     database: Optional[str] = None  # type:ignore
     driver: Optional[str] = None
     cluster: Optional[str] = None
@@ -113,12 +114,12 @@ class SparkCredentials(Credentials):
 
     spark_history_server: Optional[str] = None
 
-    # Iceberg REST catalog (required for Python models running in Kubernetes containers)
+    # Iceberg REST catalog (required for kubernetes and polars engines)
     iceberg_rest_uri: Optional[str] = None    # e.g. http://iceberg-rest:8181
     iceberg_warehouse: Optional[str] = None   # e.g. s3://warehouse/
     iceberg_token: Optional[str] = None       # optional Bearer token for REST catalog
 
-    # Kubernetes Job settings (only used when method == "kubernetes")
+    # Kubernetes Job settings (only used when engine == "kubernetes")
     kubernetes_namespace: str = "default"
     kubernetes_service_account: str = "default"
     kubernetes_job_timeout: int = 3600                        # seconds
@@ -151,80 +152,88 @@ class SparkCredentials(Credentials):
         return self.cluster
 
     def __post_init__(self) -> None:
-        if self.method is None:
-            raise DbtRuntimeError("Must specify `method` in profile")
-        # kubernetes method doesn't require a host (SQL introspection is optional via thrift)
-        if self.method not in (SparkConnectionMethod.KUBERNETES,) and self.host is None:
-            raise DbtRuntimeError("Must specify `host` in profile")
+        if self.engine is None:
+            raise DbtRuntimeError("Must specify `engine` in profile")
+        # kubernetes/polars engines don't require a host
+        if self.engine not in (IcebergEngine.KUBERNETES, IcebergEngine.POLARS) and self.host is None:
+            raise DbtRuntimeError("Must specify `host` in profile (not required for kubernetes/polars engines)")
         if self.schema is None:
             raise DbtRuntimeError("Must specify `schema` in profile")
 
         # Validate kubernetes-specific required fields
-        if self.method == SparkConnectionMethod.KUBERNETES:
+        if self.engine == IcebergEngine.KUBERNETES:
             if self.iceberg_rest_uri is None:
-                raise DbtRuntimeError("Must specify `iceberg_rest_uri` when using kubernetes method")
+                raise DbtRuntimeError("Must specify `iceberg_rest_uri` when using kubernetes engine")
             if self.iceberg_warehouse is None:
-                raise DbtRuntimeError("Must specify `iceberg_warehouse` when using kubernetes method")
+                raise DbtRuntimeError("Must specify `iceberg_warehouse` when using kubernetes engine")
             if self.image_registry is None:
-                raise DbtRuntimeError("Must specify `image_registry` when using kubernetes method")
+                raise DbtRuntimeError("Must specify `image_registry` when using kubernetes engine")
 
-        if self.method == SparkConnectionMethod.ODBC:
+        # Validate polars-specific required fields
+        if self.engine == IcebergEngine.POLARS:
+            if self.iceberg_rest_uri is None:
+                raise DbtRuntimeError("Must specify `iceberg_rest_uri` when using polars engine")
+            if self.iceberg_warehouse is None:
+                raise DbtRuntimeError("Must specify `iceberg_warehouse` when using polars engine")
+
+        if self.engine == IcebergEngine.ODBC:
             try:
                 import pyodbc  # noqa: F401
             except ImportError as e:
                 raise DbtRuntimeError(
-                    f"{self.method} connection method requires "
+                    f"{self.engine} connection method requires "
                     "additional dependencies. \n"
                     "Install the additional required dependencies with "
                     "`pip install dbt-iceberg[ODBC]`\n\n"
                     f"ImportError({e.msg})"
                 ) from e
 
-        if self.method == SparkConnectionMethod.ODBC and self.cluster and self.endpoint:
+        if self.engine == IcebergEngine.ODBC and self.cluster and self.endpoint:
             raise DbtRuntimeError(
                 "`cluster` and `endpoint` cannot both be set when"
-                f" using {self.method} method to connect to Spark"
+                f" using {self.engine} method to connect to Spark"
             )
 
         if (
-            self.method == SparkConnectionMethod.HTTP
-            or self.method == SparkConnectionMethod.THRIFT
+            self.engine == IcebergEngine.HTTP
+            or self.engine == IcebergEngine.THRIFT
             or (
-                self.method == SparkConnectionMethod.KUBERNETES
+                self.engine == IcebergEngine.KUBERNETES
                 and self.host is not None
             )
         ) and not (ThriftState and THttpClient and hive):
             raise DbtRuntimeError(
-                f"{self.method} connection method requires "
+                f"{self.engine} connection method requires "
                 "additional dependencies. \n"
                 "Install the additional required dependencies with "
                 "`pip install dbt-iceberg[PyHive]`"
             )
 
-        if self.method == SparkConnectionMethod.SESSION:
+        if self.engine == IcebergEngine.SESSION:
             try:
                 import pyspark  # noqa: F401
             except ImportError as e:
                 raise DbtRuntimeError(
-                    f"{self.method} connection method requires "
+                    f"{self.engine} connection method requires "
                     "additional dependencies. \n"
                     "Install the additional required dependencies with "
                     "`pip install dbt-iceberg[session]`\n\n"
                     f"ImportError({e.msg})"
                 ) from e
 
-        if self.host is not None and self.method not in (
-            SparkConnectionMethod.SESSION,
+        if self.host is not None and self.engine not in (
+            IcebergEngine.SESSION,
         ):
             self.host = self.host.rstrip("/")
 
-        self.server_side_parameters = {
-            str(key): str(value) for key, value in self.server_side_parameters.items()
-        }
+        if self.engine != IcebergEngine.POLARS:
+            self.server_side_parameters = {
+                str(key): str(value) for key, value in self.server_side_parameters.items()
+            }
 
-        # Disable ANSI mode to ensure compatibility with Spark v3 and v4
-        # and prevent it from being overwritten.
-        self.server_side_parameters["spark.sql.ansi.enabled"] = "false"
+            # Disable ANSI mode to ensure compatibility with Spark v3 and v4
+            # and prevent it from being overwritten.
+            self.server_side_parameters["spark.sql.ansi.enabled"] = "false"
 
     @property
     def type(self) -> str:
@@ -242,9 +251,9 @@ class SparkCredentials(Credentials):
         )
 
 
-class SparkConnectionWrapper(ABC):
+class IcebergConnectionWrapper(ABC):
     @abstractmethod
-    def cursor(self) -> "SparkConnectionWrapper":
+    def cursor(self) -> "IcebergConnectionWrapper":
         pass
 
     @abstractmethod
@@ -277,7 +286,7 @@ class SparkConnectionWrapper(ABC):
         pass
 
 
-class PyhiveConnectionWrapper(SparkConnectionWrapper):
+class PyhiveConnectionWrapper(IcebergConnectionWrapper):
     """Wrap a Spark connection in a way that no-ops transactions"""
 
     # https://forums.databricks.com/questions/2157/in-apache-spark-sql-can-we-roll-back-the-transacti.html  # noqa
@@ -463,7 +472,7 @@ class PyodbcConnectionWrapper(PyhiveConnectionWrapper):
             self._cursor.execute(sql, *bindings)
 
 
-class NoOpSqlConnectionWrapper(SparkConnectionWrapper):
+class NoOpSqlConnectionWrapper(IcebergConnectionWrapper):
     """No-op SQL wrapper for the kubernetes method when no thrift host is configured.
 
     dbt's internal machinery issues SQL statements (SHOW SCHEMAS, SHOW TABLES, etc.)
@@ -507,7 +516,7 @@ class NoOpSqlConnectionWrapper(SparkConnectionWrapper):
         return self._description
 
 
-class SparkConnectionManager(SQLConnectionManager):
+class IcebergConnectionManager(SQLConnectionManager):
     TYPE = "iceberg"
 
     SPARK_CLUSTER_HTTP_PATH = "/sql/protocolv1/o/{organization}/{cluster}"
@@ -556,7 +565,7 @@ class SparkConnectionManager(SQLConnectionManager):
 
     @classmethod
     def validate_creds(cls, creds: Any, required: Iterable[str]) -> None:
-        method = creds.method
+        method = creds.engine
 
         for key in required:
             if not hasattr(creds, key):
@@ -566,7 +575,7 @@ class SparkConnectionManager(SQLConnectionManager):
                 )
 
     @classmethod
-    def _open_thrift(cls, creds: "SparkCredentials") -> PyhiveConnectionWrapper:
+    def _open_thrift(cls, creds: "IcebergCredentials") -> PyhiveConnectionWrapper:
         """Open a pyhive connection to a long-running HiveThriftServer2."""
         cls.validate_creds(creds, ["host", "port", "schema"])
         if creds.use_ssl:
@@ -611,11 +620,11 @@ class SparkConnectionManager(SQLConnectionManager):
 
         creds = connection.credentials
         exc = None
-        handle: SparkConnectionWrapper
+        handle: IcebergConnectionWrapper
 
         for i in range(1 + creds.connect_retries):
             try:
-                if creds.method == SparkConnectionMethod.HTTP:
+                if creds.engine == IcebergEngine.HTTP:
                     cls.validate_creds(creds, ["token", "host", "port", "cluster", "organization"])
 
                     # Prepend https:// if it is missing
@@ -648,9 +657,9 @@ class SparkConnectionManager(SQLConnectionManager):
                         query_timeout=creds.query_timeout,
                         query_retries=creds.query_retries,
                     )
-                elif creds.method == SparkConnectionMethod.THRIFT:
+                elif creds.engine == IcebergEngine.THRIFT:
                     handle = cls._open_thrift(creds)
-                elif creds.method == SparkConnectionMethod.ODBC:
+                elif creds.engine == IcebergEngine.ODBC:
                     if creds.cluster is not None:
                         required_fields = [
                             "driver",
@@ -716,7 +725,7 @@ class SparkConnectionManager(SQLConnectionManager):
 
                     conn = pyodbc.connect(connection_str, autocommit=True)
                     handle = PyodbcConnectionWrapper(conn)
-                elif creds.method == SparkConnectionMethod.SESSION:
+                elif creds.engine == IcebergEngine.SESSION:
                     from .session import (  # noqa: F401
                         Connection,
                         SessionConnectionWrapper,
@@ -725,15 +734,19 @@ class SparkConnectionManager(SQLConnectionManager):
                     handle = SessionConnectionWrapper(
                         Connection(server_side_parameters=creds.server_side_parameters)
                     )
-                elif creds.method == SparkConnectionMethod.KUBERNETES:
+                elif creds.engine == IcebergEngine.KUBERNETES:
                     # SQL introspection via Thrift when a host is configured;
                     # otherwise use a no-op wrapper (Python models use KubernetesPythonJobHelper).
                     if creds.host is not None:
                         handle = cls._open_thrift(creds)
                     else:
                         handle = NoOpSqlConnectionWrapper(schema=creds.schema)
+                elif creds.engine == IcebergEngine.POLARS:
+                    from .polars_connection import PolarsConnectionWrapper
+
+                    handle = PolarsConnectionWrapper(creds)
                 else:
-                    raise DbtConfigError(f"invalid credential method: {creds.method}")
+                    raise DbtConfigError(f"invalid credential engine: {creds.engine}")
                 break
             except Exception as e:
                 exc = e
