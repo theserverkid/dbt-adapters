@@ -83,6 +83,7 @@ jobs:
     integration-tests-athena:
         if: contains(fromJSON(inputs.packages), 'dbt-athena')
         runs-on: ${{ inputs.os }}
+        timeout-minutes: 5
         defaults:
             run:
                 working-directory: "./dbt-athena"
@@ -129,6 +130,7 @@ jobs:
     integration-tests-bigquery:
         if: contains(fromJSON(inputs.packages), 'dbt-bigquery')
         runs-on: ${{ inputs.os }}
+        timeout-minutes: 5
         defaults:
             run:
                 working-directory: "./dbt-bigquery"
@@ -177,6 +179,7 @@ jobs:
             inputs.python-version == vars.DEFAULT_PYTHON_VERSION &&
             !cancelled()
         runs-on: ${{ inputs.os }}
+        timeout-minutes: 5
         # make sure these don't kick off in parallel with the non-flaky tests, which defeats the purpose of running them separately
         needs: integration-tests-bigquery
         defaults:
@@ -222,6 +225,7 @@ jobs:
     integration-tests-postgres:
         if: contains(fromJSON(inputs.packages), 'dbt-postgres')
         runs-on: ${{ inputs.os }}
+        timeout-minutes: 5
         defaults:
             run:
                 working-directory: "./dbt-postgres"
@@ -282,6 +286,7 @@ jobs:
     integration-tests-postgres-psycopg2-check:
         if: contains(fromJSON(inputs.packages), 'dbt-postgres')
         runs-on: ${{ inputs.os }}
+        timeout-minutes: 5
         defaults:
             run:
                 working-directory: "./dbt-postgres"
@@ -325,6 +330,7 @@ jobs:
     integration-tests-redshift:
         if: contains(fromJSON(inputs.packages), 'dbt-redshift')
         runs-on: ${{ inputs.os }}
+        timeout-minutes: 5
         defaults:
             run:
                 working-directory: "./dbt-redshift"
@@ -393,6 +399,7 @@ jobs:
     integration-tests-snowflake:
         if: contains(fromJSON(inputs.packages), 'dbt-snowflake')
         runs-on: ${{ inputs.os }}
+        timeout-minutes: 5
         defaults:
             run:
                 working-directory: "./dbt-snowflake"

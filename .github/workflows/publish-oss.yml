@@ -59,6 +59,7 @@ permissions:
 jobs:
     work-branch:
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         outputs:
             name: ${{ steps.branch.outputs.name }}
         steps:
@@ -132,6 +133,7 @@ jobs:
             - unit-tests
             - integration-tests
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         environment:
             name: ${{ inputs.deploy-to }}
             url: ${{ vars.PYPI_PROJECT_URL }}/${{ inputs.package }}
@@ -222,6 +224,7 @@ jobs:
             - work-branch
             - publish
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         steps:
             - name: "Checkout ${{ inputs.branch }}"
               uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # actions/checkout@v4

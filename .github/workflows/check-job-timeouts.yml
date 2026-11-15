@@ -1,0 +1,29 @@
+# Fail a pull request if any GitHub Actions job is missing
+# timeout-minutes or sets it above 5. Reusable-workflow caller
+# jobs (job-level uses:) cannot take timeout-minutes; this lint
+# skips those, and the called workflow must carry the timeout.
+name: Check job timeouts
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  check:
+    name: Job timeouts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install PyYAML
+        run: python3 -m pip install --user 'pyyaml==6.0.2'
+
+      - name: Check job timeout-minutes
+        run: python3 .github/scripts/check_job_timeouts.py

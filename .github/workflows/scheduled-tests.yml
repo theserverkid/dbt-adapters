@@ -36,6 +36,7 @@ jobs:
         if: ${{ !cancelled() }}
         needs: [run-tests]
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         steps:
             - name: "Aggregate test results for Slack Notification"
               id: results

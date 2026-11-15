@@ -24,6 +24,7 @@ jobs:
     name: Tag, publish to PyPI, and create GitHub Release
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     environment: pypi
     permissions:
       id-token: write  # OIDC trusted publishing

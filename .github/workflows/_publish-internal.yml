@@ -57,6 +57,7 @@ permissions:
 jobs:
     publish:
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         environment:
             name: "cloud-prod"
         steps:

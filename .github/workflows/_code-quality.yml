@@ -38,6 +38,7 @@ permissions:
 jobs:
     code-quality:
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         steps:
             - name: "Checkout ${{ inputs.branch }}"
               uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # actions/checkout@v4

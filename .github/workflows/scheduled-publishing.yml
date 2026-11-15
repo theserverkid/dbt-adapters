@@ -38,6 +38,7 @@ jobs:
     open-lockfile-pr:
         needs: publish
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         steps:
             - name: "Trigger lockfile PR and get PR number"
               id: pr

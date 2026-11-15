@@ -75,6 +75,7 @@ defaults:
 jobs:
     build:
         runs-on: ${{ inputs.os }}
+        timeout-minutes: 5
         name: "build - ${{ inputs.package }} - ${{ inputs.branch }} - ${{ inputs.os }} - ${{ inputs.python-version }}"
         steps:
             - name: "Checkout ${{ inputs.branch }}"

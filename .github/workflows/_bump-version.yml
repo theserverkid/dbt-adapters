@@ -64,6 +64,7 @@ permissions:
 jobs:
     main:
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         outputs:
             initial: ${{ steps.version.outputs.initial }}
             final: ${{ steps.version.outputs.final }}

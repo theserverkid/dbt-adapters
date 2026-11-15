@@ -32,6 +32,7 @@ jobs:
   promote-to-stable:
     name: "Promote commit to stable"
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     # Only react to merged PRs for security reasons.
     # See https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#pull_request_target.
     if: >

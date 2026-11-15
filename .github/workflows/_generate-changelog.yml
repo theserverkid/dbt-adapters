@@ -54,6 +54,7 @@ permissions:
 jobs:
     version:
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         outputs:
             raw: ${{ steps.version.outputs.raw }}
             base: ${{ steps.semver.outputs.base-version }}
@@ -87,6 +88,7 @@ jobs:
     changelog:
         needs: version
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         outputs:
             path: ${{ steps.changelog.outputs.path }}
             exists: ${{ steps.changelog.outputs.exists }}
@@ -120,6 +122,7 @@ jobs:
         needs: changelog
         if: needs.changelog.outputs.exists == 'false'
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         outputs:
             team: ${{ steps.team.outputs.team }}
         steps:
@@ -150,6 +153,7 @@ jobs:
             - dbt-membership
         if: needs.changelog.outputs.exists == 'false'
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         steps:
             - name: "Checkout ${{ inputs.branch }}"
               uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # actions/checkout@v4

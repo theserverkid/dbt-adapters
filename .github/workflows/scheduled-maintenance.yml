@@ -25,6 +25,7 @@ concurrency:
 jobs:
     stale:
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         strategy:
             matrix:
                 include:

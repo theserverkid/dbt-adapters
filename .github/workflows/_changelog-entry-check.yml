@@ -36,6 +36,7 @@ jobs:
         outputs:
             exists: ${{ steps.changelog.outputs.exists }}
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         steps:
             - name: "Check for changelog entry"
               id: changelog
@@ -50,6 +51,7 @@ jobs:
         needs: changelog-check
         if: needs.changelog-check.outputs.exists == 'false'
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         env:
             AUTHOR: "github-actions[bot]"
             COMMENT: >-

@@ -58,6 +58,7 @@ defaults:
 jobs:
     publish:
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         environment:
             name: ${{ inputs.deploy-to }}
             url: ${{ vars.PYPI_PROJECT_URL }}/${{ inputs.package }}
@@ -94,6 +95,7 @@ jobs:
 
     verify:
         runs-on: ${{ vars.DEFAULT_RUNNER }}
+        timeout-minutes: 5
         needs: publish
         # check the correct index
         environment:
